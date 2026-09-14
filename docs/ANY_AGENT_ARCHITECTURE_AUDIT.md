@@ -392,3 +392,47 @@ rewrite):**
 This gives ChatGPT the ability to *know* which agent ran an iteration —
 the precondition for everything else — while touching no security boundary and
 no Codex behavior.
+
+## Appendix A — Phase 2A protocol-message audit (2026-09-14)
+
+Decision: **PHASE_2A=NOT_JUSTIFIED** — do not extract `src/protocol/messages.ts`
+until the first in-tree consumer exists. This appendix preserves the audit
+evidence so the next phase does not repeat it.
+
+### Where `[C2C]` messages actually live (HEAD `311015d`)
+
+| Location | What it contains | Type |
+| --- | --- | --- |
+| `docs/protocol.md` | templates for INIT, PLAN, EXECUTED, DONE, BLOCKED, HANDOFF; boot prompt; Project instructions | prose |
+| `skill/SKILL.md` | inline INIT + EXECUTED templates and a copy of Project instructions; boot prompt/HANDOFF referenced from docs | prose |
+| `src/`, `tests/`, `scripts/`, `bin/` | **zero** message construction: no `[C2C]`, `STATE:`, `TASK_ID` or `ITERATION` string building; only checkpoint state types (`src/session/state.ts`) and CLI persistence (`c2c session set`) | code |
+| upstream #431 (open PR, not in tree) | TS builders for INIT, EXECUTED (twice; one duplicated inline), HANDOFF in `src/adapters/claude-code.ts` | code |
+
+Real duplication today is prose-to-prose (docs ↔ Skill); TypeScript has no
+construction logic to consolidate. Extracting a TS module now would produce
+dead code that the Skill (prose, consumed by the agent) cannot import and
+whose format cannot be enforced anywhere.
+
+### Evidence that future adapters will need a shared core (from #431)
+
+- Duplicated message builders: INIT (goal + planning standard + instruction),
+  EXECUTED (record metadata + review standard + connector name), HANDOFF
+  (checkpoint fields). PLAN/DONE/BLOCKED are ChatGPT-generated and only
+  recorded locally — no local builder needed.
+- Generic needs #431 hand-rolled: connected-session validation (chatUrl +
+  connectorName matching the endpoint), execution-record append (already
+  core), checkpoint read/write, optional per-agent-session checkpoint
+  isolation (`claude-sessions/<workspaceId>/<hash>.json`).
+- Claude-specific (must stay in adapters): hook installation
+  (UserPromptSubmit/PreToolUse/PostToolUse into `.claude/settings.local.json`),
+  `.claude` rule/skill files, in-app browser automation and selectors
+  (`#prompt-textarea`), internal-notification filtering, coding-task regex,
+  guard-deny semantics.
+
+### Trigger condition for extraction
+
+Create `src/protocol/messages.ts` (pure, stateless, structured data → text;
+optional `EXECUTOR:` header deferred until a consumer needs it) in the same
+slice that introduces the first in-tree emitter (Generic CLI executor or the
+first adapter). At that point characterization tests can pin real output
+against the formats in `docs/protocol.md`.
