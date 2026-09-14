@@ -1,7 +1,8 @@
-import path from "node:path";
-import { getStateDir, readJsonIfExists, writeSecureJson } from "./paths.js";
+import { mergeMachinePrefs, prefsFile, readMachinePrefs } from "./prefs.js";
+import type { SetupMode } from "./prefs.js";
 
-export type SetupMode = "auto" | "manual";
+export { prefsFile };
+export type { SetupMode };
 
 export const SETUP_MODES: readonly SetupMode[] = ["auto", "manual"];
 
@@ -22,12 +23,6 @@ export const SETUP_CHOICE_PROMPT = [
   "请回复「1」或「2」。未说明时，不要自行开始配置。",
 ].join("\n");
 
-interface StoredUiPrefs {
-  developerModeEnabled?: boolean;
-  setupMode?: SetupMode;
-  updatedAt: string;
-}
-
 export interface UiPrefsView {
   developerModeEnabled: boolean;
   setupMode: SetupMode | null;
@@ -38,25 +33,11 @@ export interface UiPrefsView {
   };
 }
 
-export function prefsFile(): string {
-  return path.join(getStateDir(), "prefs.json");
-}
-
-function readStored(): StoredUiPrefs | null {
-  const raw = readJsonIfExists<StoredUiPrefs>(prefsFile());
-  if (!raw || typeof raw !== "object") return null;
-  const setupMode = raw.setupMode === "auto" || raw.setupMode === "manual" ? raw.setupMode : undefined;
-  return {
-    developerModeEnabled: raw.developerModeEnabled === true,
-    setupMode,
-    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
-  };
-}
-
+/** Compatibility view over the machine-wide prefs.json (owned by prefs.ts). */
 export function readUiPrefs(): UiPrefsView {
-  const stored = readStored();
-  const developerModeEnabled = stored?.developerModeEnabled === true;
-  const setupMode = stored?.setupMode ?? null;
+  const machine = readMachinePrefs();
+  const developerModeEnabled = machine.developerModeEnabled;
+  const setupMode = machine.setupMode;
   return {
     developerModeEnabled,
     setupMode,
@@ -73,21 +54,14 @@ export interface UiPrefsPatch {
   setupMode?: SetupMode;
 }
 
+/** Writes through prefs.ts so transport/review settings are never dropped. */
 export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
   if (patch.setupMode !== undefined && !SETUP_MODES.includes(patch.setupMode)) {
     throw new Error(`setup-mode must be one of ${SETUP_MODES.join(", ")}`);
   }
-  const previous = readStored();
-  const setupMode = patch.setupMode ?? previous?.setupMode;
-  const stored: StoredUiPrefs = {
-    updatedAt: new Date().toISOString(),
-  };
-  // Only persist "confirmed on". Never write false — that would skip the
-  // Security page on a new ChatGPT account or a machine restore.
-  if (patch.developerModeEnabled === true || previous?.developerModeEnabled === true) {
-    stored.developerModeEnabled = true;
-  }
-  if (setupMode) stored.setupMode = setupMode;
-  writeSecureJson(prefsFile(), stored);
+  mergeMachinePrefs({
+    developerModeEnabled: patch.developerModeEnabled,
+    setupMode: patch.setupMode,
+  });
   return readUiPrefs();
 }

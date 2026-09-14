@@ -26,8 +26,18 @@ import {
 } from "../tunnel/state.js";
 import { Logger } from "../logger/index.js";
 import { getStateDir } from "../config/paths.js";
+import {
+  mergeMachinePrefs,
+  readMachinePrefs,
+  TASK_MODES,
+  TRANSPORT_MODES,
+  type MachinePrefsPatch,
+  type SetupMode,
+  type TaskMode,
+  type TransportMode,
+} from "../config/prefs.js";
 import { ensureSandboxAllowlist, getCodexConfigPath, isStateDirAllowlisted } from "../config/sandbox-allow.js";
-import { mergeUiPrefs, readUiPrefs, SETUP_MODES, type SetupMode } from "../config/ui-prefs.js";
+import { mergeUiPrefs, readUiPrefs, SETUP_MODES } from "../config/ui-prefs.js";
 import {
   CHATGPT_CREATE_CONNECTOR_URL,
   CHATGPT_DEVELOPER_MODE_URL,
@@ -1069,15 +1079,93 @@ acceptUnusedWorkspaceOption(
 )
   .action((opts: { json: boolean }) => {
     const prefs = readUiPrefs();
+    const machine = readMachinePrefs();
     if (opts.json) {
-      say(JSON.stringify({ ok: true, ...prefs }));
+      say(JSON.stringify({ ok: true, ...prefs, ...machine }));
       return;
     }
     say(prefs.developerModeEnabled ? "开发人员模式：已记住已开启" : "开发人员模式：尚未记住");
     if (prefs.setupMode === "auto") say("配置方式：AI 自动化配置（预览版）");
     else if (prefs.setupMode === "manual") say("配置方式：手动教学配置");
     else say("配置方式：尚未选择");
+    if (machine.transport === "chrome") say("传输方式：chrome（内置 Chrome）");
+    else if (machine.transport === "manual") say("传输方式：manual（手动复制粘贴）");
+    else say("传输方式：尚未选择（默认 manual）");
+    say(`任务模式：${machine.defaultMode}`);
+    say(`审查轮数上限：${machine.defaultReviewIterations}`);
+    say(`单对话任务上限：${machine.maxTasksPerConversation}`);
+    say(`协议轮次上限：${machine.maxProtocolRoundtrips}`);
+    say(`异常信号上限：${machine.maxAbnormalSignals}`);
+    say(`回复超时：${machine.replyTimeoutSeconds} 秒`);
   });
+
+function parseTransportOption(value: string): TransportMode {
+  return parsePrefModeOption("transport", value, TRANSPORT_MODES);
+}
+
+function parseTaskModeOption(value: string): TaskMode {
+  return parsePrefModeOption("default-mode", value, TASK_MODES);
+}
+
+function parseSetupModeOption(value: string): SetupMode {
+  return parsePrefModeOption("setup-mode", value, SETUP_MODES);
+}
+
+function parsePrefModeOption<T extends string>(field: string, value: string, modes: readonly T[]): T {
+  const normalized = value.trim().toLowerCase();
+  if (!(modes as readonly string[]).includes(normalized)) {
+    throw new Error(`${field} must be one of ${modes.join(", ")}`);
+  }
+  return normalized as T;
+}
+
+function parseReviewIterationsOption(value: string): number | "until_done" {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "until_done") return "until_done";
+  const parsed = Number(normalized);
+  if (!/^\d+$/.test(normalized) || !Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error("review-iterations must be a positive integer or until_done");
+  }
+  return parsed;
+}
+
+function parsePrefPositiveInteger(field: string, value: string): number {
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  if (!/^\d+$/.test(normalized) || !Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function buildMachinePrefsPatch(opts: {
+  transport?: string;
+  defaultMode?: string;
+  reviewIterations?: string;
+  maxTasksPerConversation?: string;
+  maxRoundtrips?: string;
+  replyTimeout?: string;
+}): MachinePrefsPatch {
+  const patch: MachinePrefsPatch = {};
+  if (opts.transport !== undefined) patch.transport = parseTransportOption(opts.transport);
+  if (opts.defaultMode !== undefined) patch.defaultMode = parseTaskModeOption(opts.defaultMode);
+  if (opts.reviewIterations !== undefined) {
+    patch.defaultReviewIterations = parseReviewIterationsOption(opts.reviewIterations);
+  }
+  if (opts.maxTasksPerConversation !== undefined) {
+    patch.maxTasksPerConversation = parsePrefPositiveInteger(
+      "max-tasks-per-conversation",
+      opts.maxTasksPerConversation
+    );
+  }
+  if (opts.maxRoundtrips !== undefined) {
+    patch.maxProtocolRoundtrips = parsePrefPositiveInteger("max-roundtrips", opts.maxRoundtrips);
+  }
+  if (opts.replyTimeout !== undefined) {
+    patch.replyTimeoutSeconds = parsePrefPositiveInteger("reply-timeout", opts.replyTimeout);
+  }
+  return patch;
+}
 
 acceptUnusedWorkspaceOption(
   prefsCmd
@@ -1085,32 +1173,64 @@ acceptUnusedWorkspaceOption(
     .description("Save a ChatGPT setup choice for this machine")
     .option("--developer-mode", "remember that ChatGPT developer mode is on", false)
     .option("--setup-mode <mode>", "auto (preview) or manual")
+    .option("--transport <mode>", "manual or chrome")
+    .option("--default-mode <mode>", "full, review or off")
+    .option("--review-iterations <value>", "positive integer or until_done")
+    .option("--max-tasks-per-conversation <n>", "rotation threshold, positive integer")
+    .option("--max-roundtrips <n>", "protocol roundtrip limit, positive integer")
+    .option("--reply-timeout <seconds>", "reply timeout, positive integer")
     .option("--json", "machine-readable output", false)
 )
-  .action((opts: { developerMode: boolean; setupMode?: string; json: boolean }) => {
-    try {
-      const modeRaw = opts.setupMode?.trim().toLowerCase();
-      if (modeRaw && !SETUP_MODES.includes(modeRaw as SetupMode)) {
-        throw new Error(`setup-mode must be one of ${SETUP_MODES.join(", ")}`);
+  .action(
+    (opts: {
+      developerMode: boolean;
+      setupMode?: string;
+      transport?: string;
+      defaultMode?: string;
+      reviewIterations?: string;
+      maxTasksPerConversation?: string;
+      maxRoundtrips?: string;
+      replyTimeout?: string;
+      json: boolean;
+    }) => {
+      try {
+        const setupMode = opts.setupMode !== undefined ? parseSetupModeOption(opts.setupMode) : undefined;
+        if (
+          !opts.developerMode &&
+          setupMode === undefined &&
+          opts.transport === undefined &&
+          opts.defaultMode === undefined &&
+          opts.reviewIterations === undefined &&
+          opts.maxTasksPerConversation === undefined &&
+          opts.maxRoundtrips === undefined &&
+          opts.replyTimeout === undefined
+        ) {
+          throw new Error("nothing to save: pass at least one preference flag");
+        }
+        const patch = buildMachinePrefsPatch(opts);
+        const prefs = mergeMachinePrefs({
+          developerModeEnabled: opts.developerMode ? true : undefined,
+          setupMode,
+          ...patch,
+        });
+        if (opts.json) {
+          say(JSON.stringify({ ok: true, ...readUiPrefs(), ...prefs }));
+          return;
+        }
+        if (opts.developerMode) check("已记住开发人员模式已开启");
+        if (setupMode === "auto") check("已记住配置方式：AI 自动化配置（预览版）");
+        if (setupMode === "manual") check("已记住配置方式：手动教学配置");
+        if (patch.transport !== undefined) check(`已记住传输方式：${patch.transport}`);
+        if (patch.defaultMode !== undefined) check(`已记住任务模式：${patch.defaultMode}`);
+        if (patch.defaultReviewIterations !== undefined) check(`已记住审查轮数上限：${patch.defaultReviewIterations}`);
+        if (patch.maxTasksPerConversation !== undefined) check(`已记住单对话任务上限：${patch.maxTasksPerConversation}`);
+        if (patch.maxProtocolRoundtrips !== undefined) check(`已记住协议轮次上限：${patch.maxProtocolRoundtrips}`);
+        if (patch.replyTimeoutSeconds !== undefined) check(`已记住回复超时：${patch.replyTimeoutSeconds} 秒`);
+      } catch (error) {
+        handleCliError(error, opts.json);
       }
-      if (!opts.developerMode && !modeRaw) {
-        throw new Error("nothing to save: pass --developer-mode and/or --setup-mode");
-      }
-      const prefs = mergeUiPrefs({
-        developerModeEnabled: opts.developerMode ? true : undefined,
-        setupMode: modeRaw as SetupMode | undefined,
-      });
-      if (opts.json) {
-        say(JSON.stringify({ ok: true, ...prefs }));
-        return;
-      }
-      if (opts.developerMode) check("已记住开发人员模式已开启");
-      if (modeRaw === "auto") check("已记住配置方式：AI 自动化配置（预览版）");
-      if (modeRaw === "manual") check("已记住配置方式：手动教学配置");
-    } catch (error) {
-      handleCliError(error, opts.json);
     }
-  });
+  );
 
 // ---------------------------------------------------------------- task (generic agent protocol)
 
