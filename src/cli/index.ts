@@ -56,6 +56,15 @@ import {
 } from "../session/state.js";
 import { appendExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput } from "../execution/output.js";
+import { normalizeAgentSessionId, normalizeExecutorId } from "../session/agent-session.js";
+import {
+  finishTask,
+  handoffTask,
+  markExecuted,
+  markPlan,
+  readTaskStatus,
+  startTask,
+} from "../protocol/lifecycle.js";
 
 const program = new Command();
 
@@ -1049,6 +1058,258 @@ acceptUnusedWorkspaceOption(
       if (opts.developerMode) check("已记住开发人员模式已开启");
       if (modeRaw === "auto") check("已记住配置方式：AI 自动化配置（预览版）");
       if (modeRaw === "manual") check("已记住配置方式：手动教学配置");
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+// ---------------------------------------------------------------- task (generic agent protocol)
+
+function parseTaskExecutor(value: string): string {
+  try {
+    return normalizeExecutorId(value);
+  } catch (error) {
+    throw new InvalidArgumentError((error as Error).message);
+  }
+}
+
+function parseTaskAgentSession(value: string): string {
+  try {
+    return normalizeAgentSessionId(value);
+  } catch (error) {
+    throw new InvalidArgumentError((error as Error).message);
+  }
+}
+
+interface PrintableTaskResult {
+  taskId: string;
+  iteration: number;
+  protocolState: string;
+  workspaceName: string;
+  workspaceRoot: string;
+  chatUrl?: string;
+  connectorName?: string;
+  message?: string;
+}
+
+function printTaskResult(result: PrintableTaskResult): void {
+  check(`Task ${result.taskId} · ${result.protocolState} (iteration ${result.iteration})`);
+  say(`Workspace: ${result.workspaceName} (${result.workspaceRoot})`);
+  if (result.chatUrl) say(`ChatGPT: ${result.chatUrl}`);
+  if (result.connectorName) say(`Connector: ${result.connectorName}`);
+  if (result.message) {
+    say("");
+    say("Send this message to ChatGPT:");
+    say(result.message);
+  }
+}
+
+const taskCmd = program
+  .command("task")
+  .description("Drive the agent-neutral C2C task protocol (INIT/PLAN/EXECUTED/HANDOFF/DONE)");
+
+taskCmd
+  .command("start")
+  .description("Start a task for this agent session and print the INIT message")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .requiredOption("--goal <text>", "task goal, one paragraph")
+  .option("--task <id>", "explicit task id (default: generated)")
+  .option("--json", "machine-readable output", false)
+  .action(
+    (opts: {
+      workspace?: string;
+      executor: string;
+      agentSession: string;
+      goal: string;
+      task?: string;
+      json: boolean;
+    }) => {
+      try {
+        const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const result = startTask(
+          { workspace, executor: opts.executor, agentSession: opts.agentSession },
+          { goal: opts.goal, taskId: opts.task }
+        );
+        if (opts.json) say(JSON.stringify(result));
+        else printTaskResult(result);
+      } catch (error) {
+        handleCliError(error, opts.json);
+      }
+    }
+  );
+
+taskCmd
+  .command("plan")
+  .description("Record ChatGPT's PLAN for this task iteration")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .requiredOption("--task <id>")
+  .requiredOption("--iteration <n>", "iteration from ChatGPT's PLAN", parseNonNegativeInteger)
+  .option("--next-step <text>", "what the executor will do next")
+  .option("--json", "machine-readable output", false)
+  .action(
+    (opts: {
+      workspace?: string;
+      executor: string;
+      agentSession: string;
+      task: string;
+      iteration: number;
+      nextStep?: string;
+      json: boolean;
+    }) => {
+      try {
+        const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const result = markPlan(
+          { workspace, executor: opts.executor, agentSession: opts.agentSession },
+          { taskId: opts.task, iteration: opts.iteration, nextStep: opts.nextStep }
+        );
+        if (opts.json) say(JSON.stringify(result));
+        else printTaskResult(result);
+      } catch (error) {
+        handleCliError(error, opts.json);
+      }
+    }
+  );
+
+taskCmd
+  .command("executed")
+  .description("Record the execution, append evidence, and print the EXECUTED message")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .requiredOption("--task <id>")
+  .requiredOption("--iteration <n>", "non-negative execution iteration", parseNonNegativeInteger)
+  .option("--changed-files <filesOrCount>", "comma-separated files or a count", "0")
+  .option("--tests <summary>", "e.g. '176 passed'")
+  .option("--exit-status <status>", "ok | failed | blocked", "ok")
+  .option("--notes <text>")
+  .option("--command <text>", "command whose output may be offered to ChatGPT")
+  .option("--output <text>", "command output (prefer --output-file for long logs)")
+  .option("--output-file <path>", "read command output from a local file")
+  .option("--exit-code <n>", "numeric exit code of that command", parseInteger)
+  .option("--json", "machine-readable output", false)
+  .action(
+    (opts: {
+      workspace?: string;
+      executor: string;
+      agentSession: string;
+      task: string;
+      iteration: number;
+      changedFiles: string;
+      tests?: string;
+      exitStatus: string;
+      notes?: string;
+      command?: string;
+      output?: string;
+      outputFile?: string;
+      exitCode?: number;
+      json: boolean;
+    }) => {
+      try {
+        const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const rawOutput =
+          opts.outputFile !== undefined
+            ? readCappedUtf8(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
+            : opts.output;
+        const output =
+          opts.command && rawOutput !== undefined
+            ? { command: opts.command, raw: rawOutput, exitCode: opts.exitCode ?? null }
+            : undefined;
+        const result = markExecuted(
+          { workspace, executor: opts.executor, agentSession: opts.agentSession },
+          {
+            taskId: opts.task,
+            iteration: opts.iteration,
+            changedFiles: parseChangedFiles(opts.changedFiles),
+            tests: opts.tests ?? null,
+            exitStatus: opts.exitStatus,
+            notes: opts.notes,
+            output,
+          }
+        );
+        if (opts.json) say(JSON.stringify(result));
+        else printTaskResult(result);
+      } catch (error) {
+        handleCliError(error, opts.json);
+      }
+    }
+  );
+
+taskCmd
+  .command("handoff")
+  .description("Print the HANDOFF message for this task's checkpoint")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .requiredOption("--task <id>")
+  .option("--json", "machine-readable output", false)
+  .action(
+    (opts: { workspace?: string; executor: string; agentSession: string; task: string; json: boolean }) => {
+      try {
+        const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const result = handoffTask(
+          { workspace, executor: opts.executor, agentSession: opts.agentSession },
+          { taskId: opts.task }
+        );
+        if (opts.json) say(JSON.stringify(result));
+        else printTaskResult(result);
+      } catch (error) {
+        handleCliError(error, opts.json);
+      }
+    }
+  );
+
+taskCmd
+  .command("done")
+  .description("Clear the checkpoint after ChatGPT replied DONE")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .requiredOption("--task <id>")
+  .option("--json", "machine-readable output", false)
+  .action(
+    (opts: { workspace?: string; executor: string; agentSession: string; task: string; json: boolean }) => {
+      try {
+        const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const result = finishTask(
+          { workspace, executor: opts.executor, agentSession: opts.agentSession },
+          { taskId: opts.task }
+        );
+        if (opts.json) say(JSON.stringify(result));
+        else check(`Task ${result.taskId} finished; checkpoint cleared.`);
+      } catch (error) {
+        handleCliError(error, opts.json);
+      }
+    }
+  );
+
+taskCmd
+  .command("status")
+  .description("Show the active checkpoint for this agent session")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; executor: string; agentSession: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const result = readTaskStatus({ workspace, executor: opts.executor, agentSession: opts.agentSession });
+      if (opts.json) {
+        say(JSON.stringify(result));
+      } else if (!result.active || !result.checkpoint) {
+        say(`No active checkpoint for executor "${result.executor}" session "${result.agentSession}".`);
+      } else {
+        printTaskResult({
+          taskId: result.checkpoint.taskId,
+          iteration: result.checkpoint.iteration,
+          protocolState: result.checkpoint.protocolState,
+          workspaceName: result.workspaceName,
+          workspaceRoot: result.workspaceRoot,
+        });
+      }
     } catch (error) {
       handleCliError(error, opts.json);
     }
