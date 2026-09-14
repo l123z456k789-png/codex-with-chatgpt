@@ -27,6 +27,12 @@ describe("sanitizeExecutionOutput", () => {
     expect(result.allowed).toBe(false);
   });
 
+  it("refuses output that is not clean text (embedded NUL bytes)", () => {
+    const result = sanitizeExecutionOutput("secret\u0000value\u0000hidden");
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) expect(result.reason).toBe("non_text_output");
+  });
+
   it("redacts home paths", () => {
     const result = sanitizeExecutionOutput("wrote /Users/alice/proj/src/a.ts");
     expect(result.allowed).toBe(true);

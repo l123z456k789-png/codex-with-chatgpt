@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { listExecutionOutputs } from "../src/execution/output.js";
+import { listExecutionOutputs, readExecutionOutput } from "../src/execution/output.js";
 import { appendExecutionRecord, readExecutionRecords, type ExecutionRecord } from "../src/execution/records.js";
 import { Workspace } from "../src/workspace/manager.js";
 import { cleanup, makeTmpDir } from "./helpers.js";
@@ -158,6 +158,53 @@ describe("c2c record", () => {
       expect(result.status).toBe(1);
       expect(readExecutionRecords(workspace.id)).toEqual([]);
       expect(listExecutionOutputs(workspace.id)).toEqual([]);
+    });
+  });
+
+  it("decodes UTF-16 output files before sanitizing (private keys stay restricted)", () => {
+    withRecordEnvironment((root, workspace) => {
+      const key = "-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretmaterial\n-----END RSA PRIVATE KEY-----";
+      const le = path.join(root, "key-utf16le.txt");
+      fs.writeFileSync(le, Buffer.from(key, "utf16le"));
+      const leBom = path.join(root, "key-utf16le-bom.txt");
+      fs.writeFileSync(leBom, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(key, "utf16le")]));
+      const swapped = Buffer.from(key, "utf16le");
+      swapped.swap16();
+      const beBom = path.join(root, "key-utf16be-bom.txt");
+      fs.writeFileSync(beBom, Buffer.concat([Buffer.from([0xfe, 0xff]), swapped]));
+
+      const files = [le, leBom, beBom];
+      for (const [index, file] of files.entries()) {
+        const result = runRecord(root, [
+          "--iteration",
+          String(index + 1),
+          "--command",
+          `print-key-${index}`,
+          "--output-file",
+          file,
+        ]);
+        expect(result.status).toBe(0);
+      }
+
+      const outputs = listExecutionOutputs(workspace.id);
+      expect(outputs.map((item) => item.allowed)).toEqual([false, false, false]);
+      expect(outputs.map((item) => item.restrictedReason)).toEqual(["private_key", "private_key", "private_key"]);
+    });
+  });
+
+  it("decodes UTF-16 log text into readable evidence", () => {
+    withRecordEnvironment((root, workspace) => {
+      const log = path.join(root, "utf16-log.txt");
+      fs.writeFileSync(log, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("32 tests passed\n", "utf16le")]));
+
+      const result = runRecord(root, ["--iteration", "1", "--command", "pnpm test", "--output-file", log]);
+      expect(result.status).toBe(0);
+
+      const [item] = listExecutionOutputs(workspace.id);
+      expect(item.allowed).toBe(true);
+      const body = readExecutionOutput(workspace.id, item.id);
+      expect(body.ok).toBe(true);
+      if (body.ok) expect(body.text).toContain("32 tests passed");
     });
   });
 });

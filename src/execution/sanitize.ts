@@ -64,6 +64,10 @@ export function sanitizeExecutionOutput(raw: string): SanitizeResult {
   if (HARD_REJECT.some((pattern) => pattern.test(raw))) {
     return { allowed: false, reason: "private_key" };
   }
+  // NUL bytes mean the output was not decoded as clean text; never release it.
+  if (raw.includes("\u0000")) {
+    return { allowed: false, reason: "non_text_output" };
+  }
   let text = redact(raw);
   text = applyExtraRedact(text);
   text = redactHomePaths(text);

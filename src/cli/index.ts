@@ -109,12 +109,53 @@ function parseChangedFiles(value: string): string[] | number {
 /** Local harness output only. Never pasted into ChatGPT. */
 const MAX_RECORD_OUTPUT_READ = 256 * 1024;
 
-function readCappedUtf8(filePath: string, maxBytes: number): string {
+/**
+ * Decode nominated output as text. Windows tools (PowerShell, Notepad) write
+ * UTF-16 logs; they must reach the sanitizer as real text, not mojibake that
+ * evades secret patterns.
+ */
+function decodeOutputText(bytes: Buffer): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return bytes.subarray(2).toString("utf16le");
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    const body = Buffer.from(bytes.subarray(2));
+    if (body.length % 2 !== 0) return body.toString("utf8");
+    body.swap16();
+    return body.toString("utf16le");
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return bytes.subarray(3).toString("utf8");
+  }
+  // BOM-less UTF-16: NUL bytes at consistent parity indicate UTF-16 text.
+  const sample = bytes.subarray(0, Math.min(bytes.length, 4096));
+  let zeros = 0;
+  let zerosOdd = 0;
+  for (let index = 0; index < sample.length; index++) {
+    if (sample[index] === 0) {
+      zeros++;
+      if (index % 2 === 1) zerosOdd++;
+    }
+  }
+  if (zeros > 0 && zeros / sample.length > 0.2) {
+    if (zerosOdd >= zeros - zerosOdd) {
+      return bytes.toString("utf16le");
+    }
+    const swapped = Buffer.from(bytes);
+    if (swapped.length % 2 === 0) {
+      swapped.swap16();
+      return swapped.toString("utf16le");
+    }
+  }
+  return bytes.toString("utf8");
+}
+
+function readCappedText(filePath: string, maxBytes: number): string {
   const fd = fs.openSync(filePath, "r");
   try {
     const buf = Buffer.alloc(maxBytes);
     const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    return buf.subarray(0, n).toString("utf8");
+    return decodeOutputText(buf.subarray(0, n));
   } finally {
     fs.closeSync(fd);
   }
@@ -1212,7 +1253,7 @@ taskCmd
         const workspace = new Workspace(resolveWorkspace(opts.workspace));
         const rawOutput =
           opts.outputFile !== undefined
-            ? readCappedUtf8(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
+            ? readCappedText(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
             : opts.output;
         const output =
           opts.command && rawOutput !== undefined
@@ -1351,7 +1392,7 @@ program
       let outputAvailable = false;
       const rawOutput =
         opts.outputFile !== undefined
-          ? readCappedUtf8(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
+          ? readCappedText(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
           : opts.output;
       if (opts.command && rawOutput !== undefined) {
         const savedOutput = saveExecutionOutput(workspace.id, {
