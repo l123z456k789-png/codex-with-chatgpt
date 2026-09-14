@@ -136,3 +136,11 @@ $C2C task executed $EXEC --task "$TASK_ID" --iteration <n> \
 # forward the returned message; on DONE:
 $C2C task done $EXEC --task "$TASK_ID" --json
 ```
+
+## Reference integration: Claude Code
+
+`src/adapters/claude-code.ts` is the first shipped adapter and the pattern for
+new ones: it installs Claude-specific hooks/rules, maps Claude's `session_id`
+to the generic `agent-session`, and delegates every lifecycle action to this
+protocol. It defines no second lifecycle, checkpoint store or message format.
+See [CLAUDE_CODE_INTEGRATION.md](CLAUDE_CODE_INTEGRATION.md).

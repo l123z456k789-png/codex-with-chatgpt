@@ -213,7 +213,8 @@ Requirements: Node.js >= 20, git. `cloudflared` for the public connection
 `C2C_TUNNEL_PROTOCOL=http2` and restart the bridge.
 
 Docs: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
-[security](docs/security.md) · [troubleshooting](docs/troubleshooting.md)
+[security](docs/security.md) · [troubleshooting](docs/troubleshooting.md) ·
+[agent protocol](docs/AGENT_PROTOCOL.md) · [Claude Code](docs/CLAUDE_CODE_INTEGRATION.md)
 
 ## Project layout
 
