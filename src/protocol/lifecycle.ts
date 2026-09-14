@@ -292,7 +292,8 @@ export function markExecuted(scopeInput: TaskScope, input: MarkExecutedInput): T
     checkpoint: {
       protocolState: "EXECUTED_SENT",
       waitingFor: "GPT_REVIEW",
-      knownIssues: exitStatus === "ok" ? undefined : `Execution status: ${exitStatus}`,
+      // An empty string clears issues recorded by an earlier failed iteration.
+      knownIssues: exitStatus === "ok" ? "" : `Execution status: ${exitStatus}`,
       nextExpectedStep: "Wait for ChatGPT review (PLAN, DONE or BLOCKED).",
     },
   });

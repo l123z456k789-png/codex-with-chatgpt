@@ -196,4 +196,27 @@ describe("generic task lifecycle", () => {
     expect(readSession(workspace.id)?.checkpoint?.taskId).toBe("c2c_legacy");
     expect(readSession(workspace.id)?.checkpoint?.protocolState).toBe("EXECUTED_SENT");
   });
+
+  it("clears stale known issues when a later iteration succeeds", () => {
+    const started = startTask(scope(), { goal: "goal" });
+    markPlan(scope(), { taskId: started.taskId, iteration: 1 });
+    markExecuted(scope(), {
+      taskId: started.taskId,
+      iteration: 1,
+      changedFiles: 1,
+      tests: "1 failed",
+      exitStatus: "failed",
+    });
+    expect(readAgentSessionCheckpoint(workspace.id, "opencode", "session-1")?.knownIssues).toContain("failed");
+
+    markPlan(scope(), { taskId: started.taskId, iteration: 2 });
+    markExecuted(scope(), {
+      taskId: started.taskId,
+      iteration: 2,
+      changedFiles: 1,
+      tests: "201 passed",
+      exitStatus: "ok",
+    });
+    expect(readAgentSessionCheckpoint(workspace.id, "opencode", "session-1")?.knownIssues).toBeUndefined();
+  });
 });
