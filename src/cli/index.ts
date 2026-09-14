@@ -65,6 +65,14 @@ import {
   readTaskStatus,
   startTask,
 } from "../protocol/lifecycle.js";
+import {
+  claudeGuardHook,
+  claudePostHook,
+  claudePromptHook,
+  installClaudeAdapter,
+  readClaudeStatus,
+  uninstallClaudeAdapter,
+} from "../adapters/claude-code.js";
 
 const program = new Command();
 
@@ -1353,6 +1361,155 @@ taskCmd
       }
     } catch (error) {
       handleCliError(error, opts.json);
+    }
+  });
+
+// ---------------------------------------------------------------- claude adapter
+
+function selfCommand(): string {
+  return `node ${JSON.stringify(path.resolve(process.argv[1] ?? "c2c"))}`;
+}
+
+function readHookInput(): Record<string, unknown> {
+  let raw = "";
+  try {
+    raw = fs.readFileSync(0, "utf8").trim();
+  } catch {
+    return {};
+  }
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+const claudeCmd = program
+  .command("claude")
+  .description("Use ChatGPT planning and review from Claude Code");
+
+claudeCmd
+  .command("install")
+  .description("Install or refresh the project-local Claude Code C2C rules, skill and hooks")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const result = installClaudeAdapter(resolveWorkspace(opts.workspace), selfCommand());
+      if (opts.json) say(JSON.stringify({ ok: true, ...result }));
+      else check(`Claude Code adapter installed (${result.workspaceRoot})`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+claudeCmd
+  .command("uninstall")
+  .description("Remove the managed Claude Code rules, skill and hooks")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const result = uninstallClaudeAdapter(resolveWorkspace(opts.workspace));
+      if (opts.json) say(JSON.stringify({ ok: true, ...result }));
+      else check("Claude Code adapter removed");
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+claudeCmd
+  .command("status")
+  .description("Show Claude adapter and saved ChatGPT session status")
+  .option("-w, --workspace <path>")
+  .option("--agent-session <id>", "Claude chat/session id")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; agentSession?: string; json: boolean }) => {
+    try {
+      const result = readClaudeStatus({
+        workspaceRoot: resolveWorkspace(opts.workspace),
+        agentSessionId: opts.agentSession,
+      });
+      if (opts.json) say(JSON.stringify(result));
+      else if (result.ready) check(`Claude adapter ready (${result.workspaceName})`);
+      else say("Claude adapter is not ready; install it and verify the ChatGPT chat for this workspace.");
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+claudeCmd
+  .command("prompt-hook", { hidden: true })
+  .description("Inject and start the mandatory C2C workflow for matching prompts")
+  .option("--workspace-root <path>", "canonical workspace bound at install time")
+  .action((opts: { workspaceRoot?: string }) => {
+    try {
+      const input = readHookInput();
+      const result = claudePromptHook({
+        workspaceRoot: resolveWorkspace(
+          opts.workspaceRoot ?? (typeof input.cwd === "string" ? input.cwd : undefined)
+        ),
+        prompt: typeof input.prompt === "string" ? input.prompt : "",
+        command: selfCommand(),
+        agentSessionId: typeof input.session_id === "string" ? input.session_id : undefined,
+      });
+      say(JSON.stringify(result));
+    } catch {
+      say("{}");
+    }
+  });
+
+claudeCmd
+  .command("guard-hook", { hidden: true })
+  .description("Prevent implementation before the ChatGPT PLAN is recorded")
+  .option("--workspace-root <path>", "canonical workspace bound at install time")
+  .action((opts: { workspaceRoot?: string }) => {
+    try {
+      const input = readHookInput();
+      const result = claudeGuardHook({
+        workspaceRoot: resolveWorkspace(
+          opts.workspaceRoot ?? (typeof input.cwd === "string" ? input.cwd : undefined)
+        ),
+        toolName: typeof input.tool_name === "string" ? input.tool_name : "",
+        toolInput:
+          input.tool_input && typeof input.tool_input === "object" && !Array.isArray(input.tool_input)
+            ? (input.tool_input as Record<string, unknown>)
+            : {},
+        agentSessionId: typeof input.session_id === "string" ? input.session_id : undefined,
+      });
+      say(JSON.stringify(result));
+    } catch (error) {
+      say(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: `C2C guard failed: ${(error as Error).message}`,
+          },
+        })
+      );
+    }
+  });
+
+claudeCmd
+  .command("post-hook", { hidden: true })
+  .description("Remind Claude to send the recorded execution for independent review")
+  .option("--workspace-root <path>", "canonical workspace bound at install time")
+  .action((opts: { workspaceRoot?: string }) => {
+    try {
+      const input = readHookInput();
+      const result = claudePostHook({
+        workspaceRoot: resolveWorkspace(
+          opts.workspaceRoot ?? (typeof input.cwd === "string" ? input.cwd : undefined)
+        ),
+        agentSessionId: typeof input.session_id === "string" ? input.session_id : undefined,
+      });
+      say(JSON.stringify(result));
+    } catch {
+      say("{}");
     }
   });
 
