@@ -310,7 +310,7 @@ describe("isChatGptUrl", () => {
   it("accepts https chatgpt.com URLs", () => {
     expect(isChatGptUrl("https://chatgpt.com/")).toBe(true);
     expect(isChatGptUrl("https://chatgpt.com/c/abc-123")).toBe(true);
-    expect(isChatGptUrl("https://chatgpt.com/?model=gpt-5")).toBe(true);
+    expect(isChatGptUrl("https://chatgpt.com/?tab=chats")).toBe(true);
     expect(isChatGptUrl("https://www.chatgpt.com/g/g-xyz")).toBe(true);
   });
 
@@ -335,7 +335,7 @@ describe("isChatGptConversationUrl", () => {
   it("accepts saved /c/ and /g/ conversation URLs", () => {
     expect(isChatGptConversationUrl("https://chatgpt.com/c/abc-123")).toBe(true);
     expect(isChatGptConversationUrl("https://www.chatgpt.com/g/g-xyz")).toBe(true);
-    expect(isChatGptConversationUrl("https://chatgpt.com/c/abc-123?model=gpt-5")).toBe(true);
+    expect(isChatGptConversationUrl("https://chatgpt.com/c/abc-123?tab=chats")).toBe(true);
   });
 
   it("rejects the app root and non-conversation paths", () => {
