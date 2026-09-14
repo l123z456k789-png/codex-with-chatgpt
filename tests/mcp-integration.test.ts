@@ -216,6 +216,30 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(status.outputId).toBeNull();
   });
 
+  it("test_status exposes the executor that ran the latest iteration", async () => {
+    appendExecutionRecord(bridge.workspace.id, {
+      taskId: "c2c_executor_meta",
+      iteration: 1,
+      changedFiles: 1,
+      tests: "172 passed",
+      exitStatus: "ok",
+      timestamp: new Date().toISOString(),
+      executor: "opencode",
+    });
+
+    const status = structuredJsonOf<{ available: boolean; taskId: string; executor?: string }>(
+      await client.callTool({ name: "test_status", arguments: {} })
+    );
+    expect(status.taskId).toBe("c2c_executor_meta");
+    expect(status.executor).toBe("opencode");
+
+    const summary = structuredJsonOf<{ records: { taskId: string; executor?: string }[] }>(
+      await client.callTool({ name: "execution_summary", arguments: { limit: 1 } })
+    );
+    expect(summary.records[0].taskId).toBe("c2c_executor_meta");
+    expect(summary.records[0].executor).toBe("opencode");
+  });
+
   it("skips invalid persisted records when reporting execution status", async () => {
     appendExecutionRecord(bridge.workspace.id, {
       taskId: "c2c_valid_before_invalid",

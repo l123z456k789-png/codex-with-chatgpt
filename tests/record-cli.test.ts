@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -57,6 +58,50 @@ describe("c2c record", () => {
       expect(listExecutionOutputs(workspace.id)).toEqual([
         expect.objectContaining({ command: "pnpm test", exitCode: 1, iteration: 2 }),
       ]);
+    });
+  });
+
+  it("records the executor that ran the iteration", () => {
+    withRecordEnvironment((root, workspace) => {
+      const result = runRecord(root, ["--iteration", "1", "--executor", "opencode"]);
+
+      expect(result.status).toBe(0);
+      expect(readExecutionRecords(workspace.id)).toEqual([
+        expect.objectContaining({ taskId: "c2c_test", iteration: 1, executor: "opencode" }),
+      ]);
+    });
+  });
+
+  it("keeps recording when no executor is given, so older callers still work", () => {
+    withRecordEnvironment((root, workspace) => {
+      const result = runRecord(root, ["--iteration", "1"]);
+
+      expect(result.status).toBe(0);
+      const [record] = readExecutionRecords(workspace.id);
+      expect(record.taskId).toBe("c2c_test");
+      expect(record.executor).toBeUndefined();
+    });
+  });
+
+  it("still parses legacy records that were written before executor existed", () => {
+    withRecordEnvironment((_root, workspace) => {
+      const file = path.join(process.env.C2C_STATE_DIR!, "executions", `${workspace.id}.jsonl`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.appendFileSync(
+        file,
+        JSON.stringify({
+          taskId: "c2c_legacy",
+          iteration: 1,
+          changedFiles: 2,
+          tests: "12 passed",
+          exitStatus: "ok",
+          timestamp: new Date().toISOString(),
+        }) + "\n"
+      );
+
+      const [record] = readExecutionRecords(workspace.id);
+      expect(record.taskId).toBe("c2c_legacy");
+      expect(record.executor).toBeUndefined();
     });
   });
 
