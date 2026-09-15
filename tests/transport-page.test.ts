@@ -424,10 +424,18 @@ describe("readDomSnapshot serialization", () => {
       readDomSnapshot: (selectors: typeof SELECTORS) => RawSnapshotShape;
     };
 
-    const build = new Function("document", "location", `return (${readDomSnapshot.toString()});`);
+    const build = new Function(
+      "document",
+      "location",
+      "HTMLTextAreaElement",
+      "HTMLInputElement",
+      `return (${readDomSnapshot.toString()});`
+    );
     const evaluate = build(
       { querySelector: () => null, querySelectorAll: () => [] },
-      { href: "https://chatgpt.com/c/abc-123", pathname: "/c/abc-123" }
+      { href: "https://chatgpt.com/c/abc-123", pathname: "/c/abc-123" },
+      class StubTextAreaElement {},
+      class StubInputElement {}
     ) as (selectors: typeof SELECTORS) => RawSnapshotShape;
 
     expect(evaluate(SELECTORS)).toEqual({
@@ -440,5 +448,35 @@ describe("readDomSnapshot serialization", () => {
     });
 
     expect(readDomSnapshot.toString()).not.toMatch(/\b__name\b/);
+  });
+
+  it("preserves composer line breaks by preferring innerText over textContent", async () => {
+    const { readDomSnapshot } = (await tsImport("../src/transport/driver.ts", import.meta.url)) as {
+      readDomSnapshot: (selectors: typeof SELECTORS) => RawSnapshotShape;
+    };
+
+    const newlineText = "[C2C]\nSTATE: BOOTSTRAP\nINSTRUCTION: x";
+    const composer = { innerText: newlineText, textContent: "[C2C]STATE:BOOTSTRAPINSTRUCTION:x" };
+
+    const build = new Function(
+      "document",
+      "location",
+      "HTMLTextAreaElement",
+      "HTMLInputElement",
+      `return (${readDomSnapshot.toString()});`
+    );
+    const evaluate = build(
+      {
+        querySelector: (selector: string) => (selector === "#prompt-textarea" ? composer : null),
+        querySelectorAll: () => [],
+      },
+      { href: "https://chatgpt.com/c/abc-123", pathname: "/c/abc-123" },
+      class StubTextAreaElement {},
+      class StubInputElement {}
+    ) as (selectors: typeof SELECTORS) => RawSnapshotShape;
+
+    const snapshot = evaluate(SELECTORS);
+    expect(snapshot.composerPresent).toBe(true);
+    expect(snapshot.composerText).toBe(newlineText);
   });
 });

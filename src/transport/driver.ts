@@ -93,7 +93,7 @@ export function readDomSnapshot(selectors: SelectorCandidates): RawSnapshot {
           ? ""
           : target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement
             ? target.value
-            : target.textContent ?? "",
+            : (target as HTMLElement).innerText ?? target.textContent ?? "",
     };
   });
   return {
@@ -104,7 +104,7 @@ export function readDomSnapshot(selectors: SelectorCandidates): RawSnapshot {
         ? ""
         : composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
           ? composer.value
-          : composer.textContent ?? "",
+          : (composer as HTMLElement).innerText ?? composer.textContent ?? "",
     generating: stopButton !== null,
     loginRequired: loginIndicator !== null || location.pathname.startsWith("/auth/"),
     messages,
@@ -163,7 +163,7 @@ export async function createPlaywrightDriver(port: number): Promise<PageDriver> 
       const composer = await findLocator(SELECTORS.composer);
       return composer.evaluate((element) => {
         if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;
-        return element.textContent ?? "";
+        return (element as HTMLElement).innerText ?? element.textContent ?? "";
       });
     },
 
