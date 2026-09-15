@@ -24,6 +24,7 @@ export interface PageDriver {
   open(url: string): Promise<void>;
   snapshot(): Promise<PageSnapshot>;
   focusComposer(): Promise<void>;
+  clearComposer(): Promise<void>;
   typeText(text: string): Promise<void>;
   readComposerText(): Promise<string>;
   clickSend(): Promise<void>;
@@ -153,6 +154,11 @@ export async function createPlaywrightDriver(port: number): Promise<PageDriver> 
 
     async focusComposer(): Promise<void> {
       await (await findLocator(SELECTORS.composer)).click();
+    },
+
+    async clearComposer(): Promise<void> {
+      await page.keyboard.press("Control+A");
+      await page.keyboard.press("Delete");
     },
 
     async typeText(text: string): Promise<void> {

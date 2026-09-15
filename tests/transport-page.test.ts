@@ -226,6 +226,18 @@ describe("sendMessage", () => {
     expect(id).toMatch(/^msg-\d+-[0-9a-f]{8}$/);
   });
 
+  it("clears a leftover composer draft before typing the new message", async () => {
+    const driver = new FakePageDriver({ composerText: "leftover draft" });
+
+    const id = await sendMessage(driver, "fresh message");
+
+    expect(driver.clearCalls).toBe(1);
+    expect(driver.messages).toHaveLength(1);
+    expect(driver.messages[0].text).toBe("fresh message");
+    expect(driver.composerText).toBe("");
+    expect(id).toBe(driver.messages[0].id);
+  });
+
   it("confirms against normalized message text", async () => {
     const driver = new FakePageDriver();
     driver.onSendHook = (fake) => {

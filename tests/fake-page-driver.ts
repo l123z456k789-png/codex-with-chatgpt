@@ -19,6 +19,7 @@ export class FakePageDriver implements PageDriver {
 
   opened: string[] = [];
   focusCalls = 0;
+  clearCalls = 0;
   typeCalls = 0;
   sendClicks = 0;
   snapshotCalls = 0;
@@ -69,6 +70,11 @@ export class FakePageDriver implements PageDriver {
 
   async focusComposer(): Promise<void> {
     this.focusCalls += 1;
+  }
+
+  async clearComposer(): Promise<void> {
+    this.clearCalls += 1;
+    this.composerText = "";
   }
 
   async typeText(text: string): Promise<void> {

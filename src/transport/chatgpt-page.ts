@@ -111,6 +111,7 @@ export async function sendMessage(driver: PageDriver, text: string, options: Pag
   );
 
   await driver.focusComposer();
+  await driver.clearComposer();
   await driver.typeText(text);
 
   const typed = normalizeMessageText(await driver.readComposerText());
