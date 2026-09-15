@@ -113,5 +113,6 @@ export function validateReplyIdentity(
 /** Marker the bootstrap verification reply must contain. */
 export function parseReadinessWorkspace(text: string): string | null {
   const match = text.match(/^\s*WORKSPACE:\s*(.+?)\s*$/m);
-  return match?.[1] ?? null;
+  const workspace = match?.[1]?.trim() ?? "";
+  return workspace === "" ? null : workspace;
 }

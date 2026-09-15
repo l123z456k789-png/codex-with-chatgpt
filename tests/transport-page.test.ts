@@ -10,6 +10,7 @@ import {
   sendMessage,
   startNewConversation,
   waitForReply,
+  waitForReplyMessage,
 } from "../src/transport/chatgpt-page.js";
 import { CHATGPT_NEW_CHAT_URL } from "../src/transport/selectors.js";
 import { FakePageDriver } from "./fake-page-driver.js";
@@ -167,6 +168,29 @@ describe("sendMessage", () => {
     expect(driver.typedTexts).toEqual(["lost message"]);
   });
 
+  it("does not false-confirm an older identical user message as the new send", async () => {
+    const driver = new FakePageDriver();
+    const existing = driver.appendUserMessage("hello from c2c");
+    driver.onSendHook = (fake) => {
+      fake.composerText = "";
+    };
+
+    expectTransportError(await caught(sendMessage(driver, "hello from c2c", { pollMs: 1, timeoutMs: 40 })), "CHATGPT_SEND_UNCONFIRMED");
+    expect(driver.sendClicks).toBe(1);
+    expect(driver.messages).toHaveLength(1);
+    expect(driver.messages[0].id).toBe(existing.id);
+  });
+
+  it("confirms the new message even when the identical text already exists", async () => {
+    const driver = new FakePageDriver();
+    const existing = driver.appendUserMessage("hello from c2c");
+
+    const id = await sendMessage(driver, "hello from c2c", { pollMs: 1, timeoutMs: 200 });
+    expect(driver.messages).toHaveLength(2);
+    expect(id).toBe(driver.messages[1].id);
+    expect(id).not.toBe(existing.id);
+  });
+
   it("keeps polling while the composer still holds the text", async () => {
     const driver = new FakePageDriver();
     driver.onSendHook = (fake) => {
@@ -206,6 +230,17 @@ describe("waitForReply", () => {
 
     await expect(waitForReply(driver, anchor.id, FAST)).resolves.toBe(chunks.join(""));
     expect(driver.snapshotCalls).toBeGreaterThan(chunks.length + 1);
+  });
+
+  it("reports the reply id alongside its text", async () => {
+    const { driver, anchor } = withAnchor();
+    const reply = driver.appendAssistantMessage("[C2C]\nSTATE: DONE\nTASK_ID: c2c_ab12cd\nITERATION: 2");
+
+    await expect(waitForReplyMessage(driver, anchor.id, FAST)).resolves.toEqual({
+      id: reply.id,
+      text: "[C2C]\nSTATE: DONE\nTASK_ID: c2c_ab12cd\nITERATION: 2",
+    });
+    await expect(waitForReply(driver, anchor.id, FAST)).resolves.toBe("[C2C]\nSTATE: DONE\nTASK_ID: c2c_ab12cd\nITERATION: 2");
   });
 
   it("returns a prose-only reply unchanged", async () => {

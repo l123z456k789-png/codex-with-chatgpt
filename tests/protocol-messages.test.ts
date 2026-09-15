@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExecutedMessage, buildHandoffMessage, buildInitMessage } from "../src/protocol/messages.js";
+import { buildBootstrapMessage, buildExecutedMessage, buildHandoffMessage, buildInitMessage } from "../src/protocol/messages.js";
 
 const CONNECTOR = "Codex with ChatGPT · demo";
 
@@ -40,6 +40,23 @@ describe("buildInitMessage", () => {
     expect(goalLine.startsWith("Line one Line two x")).toBe(true);
     expect(goalLine.endsWith("…")).toBe(true);
     expect(goalLine.length).toBe(1500);
+  });
+});
+
+describe("buildBootstrapMessage", () => {
+  it("renders the documented bootstrap format", () => {
+    const message = buildBootstrapMessage({ connectorName: CONNECTOR, workspaceName: "demo" });
+
+    expect(message).toBe(
+      [
+        "[C2C]",
+        "STATE: BOOTSTRAP",
+        "",
+        "INSTRUCTION:",
+        `Use only the connector named "${CONNECTOR}". Confirm workspace_info returns "demo" exactly. Then reply with the protocol marker from this message plus the exact line "WORKSPACE: demo" and "WORKSPACE_OK".`,
+      ].join("\n")
+    );
+    expect(message.match(/\[C2C\]/g)).toHaveLength(1);
   });
 });
 

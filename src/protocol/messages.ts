@@ -30,6 +30,21 @@ export function buildInitMessage(input: InitMessageInput): string {
   ].join("\n");
 }
 
+export interface BootstrapMessageInput {
+  connectorName: string;
+  workspaceName: string;
+}
+
+export function buildBootstrapMessage(input: BootstrapMessageInput): string {
+  return [
+    "[C2C]",
+    "STATE: BOOTSTRAP",
+    "",
+    "INSTRUCTION:",
+    `Use only the connector named "${input.connectorName}". Confirm workspace_info returns "${input.workspaceName}" exactly. Then reply with the protocol marker from this message plus the exact line "WORKSPACE: ${input.workspaceName}" and "WORKSPACE_OK".`,
+  ].join("\n");
+}
+
 export interface ExecutedMessageInput {
   taskId: string;
   iteration: number;

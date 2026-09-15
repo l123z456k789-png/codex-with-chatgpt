@@ -160,6 +160,11 @@ describe("parseReadinessWorkspace", () => {
   it("returns null when the workspace name is empty", () => {
     expect(parseReadinessWorkspace("WORKSPACE:")).toBeNull();
   });
+
+  it("returns null when the workspace value is only whitespace", () => {
+    expect(parseReadinessWorkspace("WORKSPACE:   ")).toBeNull();
+    expect(parseReadinessWorkspace("WORKSPACE: \t ")).toBeNull();
+  });
 });
 
 describe("delivery ledger", () => {

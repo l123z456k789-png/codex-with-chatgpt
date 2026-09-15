@@ -81,7 +81,11 @@ export async function sendMessage(driver: PageDriver, text: string, options: Pag
   const timing = resolveTiming(options);
   const expected = normalizeMessageText(text);
 
-  await readSnapshot(driver);
+  const before = await readSnapshot(driver);
+  const knownUserMessageIds = new Set(
+    before.messages.filter((message) => message.role === "user").map((message) => message.id)
+  );
+
   await driver.focusComposer();
   await driver.typeText(text);
 
@@ -100,7 +104,7 @@ export async function sendMessage(driver: PageDriver, text: string, options: Pag
     const snapshot = await driver.snapshot();
     const composerEmpty = normalizeMessageText(snapshot.composerText) === "";
     const userMessage = findLastMessageByText(snapshot.messages, "user", expected);
-    if (composerEmpty && userMessage) return userMessage.id;
+    if (composerEmpty && userMessage && !knownUserMessageIds.has(userMessage.id)) return userMessage.id;
     if (timing.now() >= deadline) {
       throw new TransportError(
         "CHATGPT_SEND_UNCONFIRMED",
@@ -123,7 +127,12 @@ function findReplyAfter(messages: PageMessage[], afterIndex: number): PageMessag
   return found;
 }
 
-export async function waitForReply(driver: PageDriver, afterMessageId: string, options: PageFlowOptions = {}): Promise<string> {
+export interface ReplyMessage {
+  id: string;
+  text: string;
+}
+
+export async function waitForReplyMessage(driver: PageDriver, afterMessageId: string, options: PageFlowOptions = {}): Promise<ReplyMessage> {
   const timing = resolveTiming(options);
   const afterIndex = parseMessageIndex(afterMessageId);
   if (afterIndex === null) {
@@ -140,7 +149,7 @@ export async function waitForReply(driver: PageDriver, afterMessageId: string, o
     const reply = findReplyAfter(snapshot.messages, afterIndex);
     if (reply && !snapshot.generating) {
       if (candidateId === reply.id && candidateText === reply.text) {
-        if (timing.now() - candidateSince >= timing.stabilityMs) return reply.text;
+        if (timing.now() - candidateSince >= timing.stabilityMs) return { id: reply.id, text: reply.text };
       } else {
         candidateId = reply.id;
         candidateText = reply.text;
@@ -157,4 +166,8 @@ export async function waitForReply(driver: PageDriver, afterMessageId: string, o
     }
     await sleep(timing.pollMs);
   }
+}
+
+export async function waitForReply(driver: PageDriver, afterMessageId: string, options: PageFlowOptions = {}): Promise<string> {
+  return (await waitForReplyMessage(driver, afterMessageId, options)).text;
 }
