@@ -61,8 +61,31 @@ Unit tests use `FakePageDriver`; only the live runs could expose these:
  "manualFallback":"[C2C]\nSTATE: INIT\n..."}}
 ```
 
-The transport failure path returned the pending `[C2C]` message for manual
-fallback without any fake success, as designed.
+The actual exchanged messages in the C2C-owned conversation (read back live
+through the transport):
+
+```
+user:      [C2C]
+           STATE: BOOTSTRAP
+
+           INSTRUCTION:
+           Use only the connector named "Codex with ChatGPT · t9-live". Confirm
+           workspace_info returns "c2c-t9-scratch" exactly. Then reply with the
+           protocol marker from this message plus the exact line
+           "WORKSPACE: c2c-t9-scratch" and "WORKSPACE_OK".
+
+assistant: [C2C]
+           ERROR: connector "Codex with ChatGPT · t9-live" is not available in
+           this chat, so I cannot truthfully confirm workspace_info.
+
+           WORKSPACE_OK not asserted.
+```
+
+This proves the zero-copy-paste delivery path (no human pasting) and honest
+failure handling on both sides: ChatGPT did not invent a workspace
+confirmation, and the transport refused to accept a reply without the
+`WORKSPACE:` line. The transport failure path returned the pending `[C2C]`
+message for manual fallback without any fake success, as designed.
 
 ## 4. Acceptance items
 
