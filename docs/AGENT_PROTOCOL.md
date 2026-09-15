@@ -144,3 +144,15 @@ new ones: it installs Claude-specific hooks/rules, maps Claude's `session_id`
 to the generic `agent-session`, and delegates every lifecycle action to this
 protocol. It defines no second lifecycle, checkpoint store or message format.
 See [CLAUDE_CODE_INTEGRATION.md](CLAUDE_CODE_INTEGRATION.md).
+
+## Outbound transport (optional)
+
+By default this protocol only builds the `[C2C]` messages; delivery is the
+executor's job (its own browser, computer-use tool, or manual copy-paste). The
+optional C2C-owned Chrome transport can deliver them and read ChatGPT's reply
+instead: add `--transport chrome` to `c2c task start/executed/resume`, or make
+it the machine default with `c2c prefs set --transport chrome`. Transport is
+opt-in, never changes this protocol, and always keeps the manual fallback
+message when it fails. Setup, the daily loop for OpenCode/Claude Code/Codex,
+review limits, rotation, recovery, security boundaries and the live E2E
+procedure are documented in [C2C_TRANSPORT.md](C2C_TRANSPORT.md).

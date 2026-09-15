@@ -96,6 +96,11 @@ import {
   readClaudeStatus,
   uninstallClaudeAdapter,
 } from "../adapters/claude-code.js";
+import {
+  installOpenCodeAdapter,
+  readOpenCodeStatus,
+  uninstallOpenCodeAdapter,
+} from "../adapters/opencode.js";
 
 const program = new Command();
 
@@ -1931,6 +1936,62 @@ claudeCmd
       say(JSON.stringify(result));
     } catch {
       say("{}");
+    }
+  });
+
+// ---------------------------------------------------------------- opencode adapter
+
+const opencodeCmd = program
+  .command("opencode")
+  .description("Use ChatGPT planning and review from OpenCode");
+
+opencodeCmd
+  .command("install")
+  .description("Install or refresh the project-local OpenCode C2C skill")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const result = installOpenCodeAdapter(resolveWorkspace(opts.workspace), selfCommand());
+      if (opts.json) say(JSON.stringify({ ok: true, ...result }));
+      else check(`OpenCode adapter installed (${result.workspaceRoot})`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+opencodeCmd
+  .command("uninstall")
+  .description("Remove the managed OpenCode C2C skill")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const result = uninstallOpenCodeAdapter(resolveWorkspace(opts.workspace));
+      if (opts.json) say(JSON.stringify({ ok: true, ...result }));
+      else check("OpenCode adapter removed");
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+opencodeCmd
+  .command("status")
+  .description("Show OpenCode adapter and saved ChatGPT session status")
+  .option("-w, --workspace <path>")
+  .option("--agent-session <id>", "OpenCode session id")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; agentSession?: string; json: boolean }) => {
+    try {
+      const result = readOpenCodeStatus({
+        workspaceRoot: resolveWorkspace(opts.workspace),
+        agentSessionId: opts.agentSession,
+      });
+      if (opts.json) say(JSON.stringify(result));
+      else if (result.ready) check(`OpenCode adapter ready (${result.workspaceName})`);
+      else say("OpenCode adapter is not ready; install it and verify the ChatGPT chat for this workspace.");
+    } catch (error) {
+      handleCliError(error, opts.json);
     }
   });
 
