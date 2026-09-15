@@ -3,6 +3,9 @@ import { normalizeMessageText } from "./delivery.js";
 import { TransportError } from "./errors.js";
 import { SELECTORS, type SelectorCandidates } from "./selectors.js";
 
+export const DEFAULT_SEND_READY_TIMEOUT_MS = 10_000;
+const SEND_READY_POLL_INTERVAL_MS = 200;
+
 export type PageRole = "user" | "assistant";
 
 export interface PageMessage {
@@ -130,6 +133,22 @@ export async function createPlaywrightDriver(port: number): Promise<PageDriver> 
     throw new TransportError("CHATGPT_UI_CHANGED", `No ChatGPT element matched: ${candidates.join(", ")}`);
   };
 
+  const findLocatorEventually = async (
+    candidates: string[],
+    timeoutMs = DEFAULT_SEND_READY_TIMEOUT_MS
+  ) => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      for (const candidate of candidates) {
+        const locator = page.locator(candidate).first();
+        if ((await locator.count()) > 0) return locator;
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, SEND_READY_POLL_INTERVAL_MS));
+    }
+    throw new TransportError("CHATGPT_UI_CHANGED", `No ChatGPT element matched: ${candidates.join(", ")}`);
+  };
+
   return {
     async open(url: string): Promise<void> {
       await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -174,7 +193,7 @@ export async function createPlaywrightDriver(port: number): Promise<PageDriver> 
     },
 
     async clickSend(): Promise<void> {
-      await (await findLocator(SELECTORS.sendButton)).click();
+      await (await findLocatorEventually(SELECTORS.sendButton)).click();
     },
 
     async close(): Promise<void> {
