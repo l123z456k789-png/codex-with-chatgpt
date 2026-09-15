@@ -441,14 +441,18 @@ describe("chrome state", () => {
 });
 
 describe("openChromeForLogin", () => {
-  it("opens the C2C profile as a plain window without a debugging port", () => {
+  it("opens the C2C profile as a plain window without a debugging port", async () => {
     const calls: SpawnRecord[] = [];
     const binary = path.join(tmpDir("bin"), "chrome.exe");
     const profileDir = chromeProfileDir();
+    const { sent } = spyProcessKill([LIVE_PID]);
+    const probe = vi.fn(async () => true);
 
-    const result = openChromeForLogin({ findBinary: () => binary, spawnFn: recordingSpawn(LIVE_PID, calls) });
+    const result = await openChromeForLogin({ findBinary: () => binary, spawnFn: recordingSpawn(LIVE_PID, calls), probe });
 
-    expect(result).toEqual({ pid: LIVE_PID, binary, profileDir });
+    expect(result).toEqual({ pid: LIVE_PID, binary, profileDir, closedPrior: false });
+    expect(probe).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
     expect(calls).toHaveLength(1);
     expect(calls[0].binary).toBe(binary);
     const args = calls[0].args;
@@ -461,11 +465,32 @@ describe("openChromeForLogin", () => {
     expect(fs.existsSync(chromeStateFile())).toBe(false);
   });
 
-  it("reports CHROME_NOT_FOUND when no Google Chrome binary exists", () => {
+  it("closes a live recorded instance before opening the plain login window", async () => {
+    writeState(instance(LIVE_PID, 9_222));
+    const { sent } = spyProcessKill([LIVE_PID]);
+    const calls: SpawnRecord[] = [];
+    const binary = path.join(tmpDir("bin"), "chrome.exe");
+    const probe = vi.fn(async (port: number) => port === 9_222);
+
+    const result = await openChromeForLogin({ findBinary: () => binary, spawnFn: recordingSpawn(NEW_PID, calls), probe });
+
+    expect(result).toEqual({ pid: NEW_PID, binary, profileDir: chromeProfileDir(), closedPrior: true });
+    expect(probe).toHaveBeenCalledWith(9_222);
+    expect(sent).toEqual([{ pid: LIVE_PID, signal: "SIGTERM" }]);
+    expect(readChromeState()).toBeNull();
+    expect(fs.existsSync(chromeStateFile())).toBe(false);
+    expect(calls).toHaveLength(1);
+    const args = calls[0].args;
+    expect(args[0]).toBe(`--user-data-dir=${chromeProfileDir()}`);
+    expect(args[args.length - 1]).toBe(START_URL);
+    expect(args.join(" ")).not.toContain("remote-debugging-port");
+  });
+
+  it("reports CHROME_NOT_FOUND when no Google Chrome binary exists", async () => {
     const calls: SpawnRecord[] = [];
     let error: unknown;
     try {
-      openChromeForLogin({ findBinary: () => null, spawnFn: recordingSpawn(LIVE_PID, calls) });
+      await openChromeForLogin({ findBinary: () => null, spawnFn: recordingSpawn(LIVE_PID, calls) });
     } catch (caught) {
       error = caught;
     }

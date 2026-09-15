@@ -268,6 +268,21 @@ export interface ChromeLoginLaunch {
   pid?: number;
   binary: string;
   profileDir: string;
+  closedPrior: boolean;
+}
+
+/**
+ * Chrome's process singleton is scoped to `--user-data-dir`, so a live
+ * transport instance would delegate a plain login launch to its debug-port
+ * window and exit. Detect a recorded live instance (state + probe) and close
+ * it (kill + clear state) before the login window is opened.
+ */
+async function closePriorLoginInstance(deps: ChromeDeps): Promise<boolean> {
+  const existing = readChromeState();
+  if (!existing || !isPidAlive(existing.pid)) return false;
+  const healthy = await (deps.probe ?? probeChromePort)(existing.port);
+  if (!healthy) return false;
+  return (await closeChrome(deps)).closed;
 }
 
 /**
@@ -276,7 +291,7 @@ export interface ChromeLoginLaunch {
  * launched with `--remote-debugging-port`, and this window is never attached
  * to or tracked in `chrome.json` — the user logs in and closes it.
  */
-export function openChromeForLogin(deps: ChromeDeps = {}): ChromeLoginLaunch {
+export async function openChromeForLogin(deps: ChromeDeps = {}): Promise<ChromeLoginLaunch> {
   const binary = findChromeBinary(deps);
   if (!binary) {
     throw new TransportError(
@@ -285,11 +300,13 @@ export function openChromeForLogin(deps: ChromeDeps = {}): ChromeLoginLaunch {
     );
   }
 
+  const closedPrior = await closePriorLoginInstance(deps);
+
   const profileDir = chromeProfileDir();
   ensureDir(profileDir);
   const child = (deps.spawnFn ?? spawnChrome)(binary, loginChromeArgs(profileDir));
   child.unref?.();
-  return { pid: child.pid, binary, profileDir };
+  return { pid: child.pid, binary, profileDir, closedPrior };
 }
 
 export async function closeChrome(_deps: ChromeDeps = {}): Promise<{ closed: boolean; pid?: number }> {

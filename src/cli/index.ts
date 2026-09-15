@@ -1794,12 +1794,15 @@ browserCmd
   .command("login")
   .description("Open the C2C Chrome profile for the one-time manual ChatGPT login (no debugging port)")
   .option("--json", "machine-readable output", false)
-  .action((opts: { json: boolean }) => {
+  .action(async (opts: { json: boolean }) => {
     try {
-      const result = openChromeForLogin();
+      const result = await openChromeForLogin();
       if (opts.json) {
         say(JSON.stringify({ ok: true, ...result }));
         return;
+      }
+      if (result.closedPrior) {
+        say("Closed the running C2C Chrome instance first: Chrome would have reused its debugging window for the login.");
       }
       check("Chrome opened with the C2C profile.");
       say(

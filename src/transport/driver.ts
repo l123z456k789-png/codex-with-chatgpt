@@ -176,7 +176,7 @@ export async function createPlaywrightDriver(port: number): Promise<PageDriver> 
     },
 
     async clearComposer(): Promise<void> {
-      await page.keyboard.press("Control+A");
+      await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
       await page.keyboard.press("Delete");
     },
 
