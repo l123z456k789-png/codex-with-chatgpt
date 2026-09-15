@@ -58,6 +58,7 @@ export interface DeliverOutcome extends SendOutcome {
 export interface ChatGptTransportOptions {
   pollMs?: number;
   stabilityMs?: number;
+  readyTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -101,6 +102,7 @@ export class ChatGptTransport {
     return {
       pollMs: this.options.pollMs,
       stabilityMs: this.options.stabilityMs,
+      readyTimeoutMs: this.options.readyTimeoutMs,
       timeoutMs,
       now: this.options.now,
     };
@@ -110,7 +112,9 @@ export class ChatGptTransport {
   async ensureConversation(input: { chatUrl?: string | null; forceNewChat?: boolean } = {}): Promise<string> {
     const chatUrl = input.chatUrl;
     if (!input.forceNewChat && chatUrl) {
-      await asTransportError("Opening the ChatGPT conversation", () => openConversation(this.driver, chatUrl));
+      await asTransportError("Opening the ChatGPT conversation", () =>
+        openConversation(this.driver, chatUrl, this.flowOptions())
+      );
       const snapshot = await asTransportError("Reading the conversation", () => readSnapshot(this.driver));
       if (!isChatGptConversationUrl(snapshot.url)) {
         throw new TransportError(
@@ -129,7 +133,7 @@ export class ChatGptTransport {
       workspaceName: this.context.workspaceName,
     });
     return asTransportError("Bootstrapping the ChatGPT conversation", async () => {
-      await startNewConversation(this.driver);
+      await startNewConversation(this.driver, this.flowOptions());
       const sentMessageId = await sendMessage(this.driver, message, this.flowOptions());
       const reply = await waitForReplyMessage(this.driver, sentMessageId, this.flowOptions());
 

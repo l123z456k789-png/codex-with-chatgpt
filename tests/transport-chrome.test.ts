@@ -8,6 +8,7 @@ import {
   closeChrome,
   ensureChrome,
   findChromeBinary,
+  openChromeForLogin,
   readChromeState,
   type ChromeInstance,
 } from "../src/transport/chrome.js";
@@ -436,6 +437,43 @@ describe("chrome state", () => {
     const value = instance(LIVE_PID, 9_222);
     writeState(value);
     expect(readChromeState()).toEqual(value);
+  });
+});
+
+describe("openChromeForLogin", () => {
+  it("opens the C2C profile as a plain window without a debugging port", () => {
+    const calls: SpawnRecord[] = [];
+    const binary = path.join(tmpDir("bin"), "chrome.exe");
+    const profileDir = chromeProfileDir();
+
+    const result = openChromeForLogin({ findBinary: () => binary, spawnFn: recordingSpawn(LIVE_PID, calls) });
+
+    expect(result).toEqual({ pid: LIVE_PID, binary, profileDir });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].binary).toBe(binary);
+    const args = calls[0].args;
+    expect(args[0]).toBe(`--user-data-dir=${profileDir}`);
+    expect(args).toContain("--no-first-run");
+    expect(args).toContain("--no-default-browser-check");
+    expect(args[args.length - 1]).toBe(START_URL);
+    expect(args.join(" ")).not.toContain("remote-debugging-port");
+    expect(readChromeState()).toBeNull();
+    expect(fs.existsSync(chromeStateFile())).toBe(false);
+  });
+
+  it("reports CHROME_NOT_FOUND when no Google Chrome binary exists", () => {
+    const calls: SpawnRecord[] = [];
+    let error: unknown;
+    try {
+      openChromeForLogin({ findBinary: () => null, spawnFn: recordingSpawn(LIVE_PID, calls) });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(TransportError);
+    expect((error as TransportError).code).toBe("CHROME_NOT_FOUND");
+    expect(calls).toHaveLength(0);
+    expect(readChromeState()).toBeNull();
   });
 });
 

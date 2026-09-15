@@ -8,11 +8,13 @@ export { messageIdFor, parseMessageIndex } from "./driver.js";
 export const DEFAULT_POLL_MS = 800;
 export const DEFAULT_STABILITY_MS = 1_500;
 export const DEFAULT_TIMEOUT_MS = 600_000;
+export const DEFAULT_READY_TIMEOUT_MS = 15_000;
 
 export interface PageFlowOptions {
   pollMs?: number;
   stabilityMs?: number;
   timeoutMs?: number;
+  readyTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -20,6 +22,7 @@ interface ResolvedTiming {
   pollMs: number;
   stabilityMs: number;
   timeoutMs: number;
+  readyTimeoutMs: number;
   now: () => number;
 }
 
@@ -28,6 +31,7 @@ function resolveTiming(options: PageFlowOptions): ResolvedTiming {
     pollMs: options.pollMs ?? DEFAULT_POLL_MS,
     stabilityMs: options.stabilityMs ?? DEFAULT_STABILITY_MS,
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    readyTimeoutMs: options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
     now: options.now ?? Date.now,
   };
 }
@@ -54,19 +58,39 @@ export async function readSnapshot(driver: PageDriver): Promise<PageSnapshot> {
   return snapshot;
 }
 
-export async function openConversation(driver: PageDriver, url: string): Promise<void> {
+/**
+ * Bounded readiness poll for a freshly opened page: ChatGPT hydrates the
+ * composer after the navigation commits, so a single snapshot can race the
+ * app. Resolves with the first ready snapshot, or fails on login / deadline.
+ */
+export async function waitForPageReady(driver: PageDriver, options: PageFlowOptions = {}): Promise<PageSnapshot> {
+  const timing = resolveTiming(options);
+  const deadline = timing.now() + timing.readyTimeoutMs;
+
+  for (;;) {
+    const snapshot = await driver.snapshot();
+    if (snapshot.loginRequired) {
+      throw new TransportError("CHATGPT_LOGIN_REQUIRED", LOGIN_MESSAGE);
+    }
+    if (snapshot.composerPresent) return snapshot;
+    if (timing.now() >= deadline) {
+      throw new TransportError("CHATGPT_UI_CHANGED", "The ChatGPT composer was not found; the page layout may have changed.");
+    }
+    await sleep(timing.pollMs);
+  }
+}
+
+export async function openConversation(driver: PageDriver, url: string, options: PageFlowOptions = {}): Promise<void> {
   if (!isChatGptUrl(url)) {
     throw new TransportError("INVALID_CONVERSATION_URL", `Refusing to open a non-ChatGPT URL: ${url}`);
   }
   await driver.open(url);
-  const snapshot = await driver.snapshot();
-  if (snapshot.loginRequired) {
-    throw new TransportError("CHATGPT_LOGIN_REQUIRED", LOGIN_MESSAGE);
-  }
+  await waitForPageReady(driver, options);
 }
 
-export async function startNewConversation(driver: PageDriver): Promise<void> {
+export async function startNewConversation(driver: PageDriver, options: PageFlowOptions = {}): Promise<PageSnapshot> {
   await driver.open(CHATGPT_NEW_CHAT_URL);
+  return waitForPageReady(driver, options);
 }
 
 function findLastMessageByText(messages: PageMessage[], role: PageMessage["role"], text: string): PageMessage | null {

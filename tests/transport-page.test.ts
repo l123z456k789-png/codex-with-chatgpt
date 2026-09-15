@@ -4,12 +4,14 @@ import { TransportError } from "../src/transport/errors.js";
 import { messageIdFor, parseMessageIndex } from "../src/transport/driver.js";
 import {
   DEFAULT_POLL_MS,
+  DEFAULT_READY_TIMEOUT_MS,
   DEFAULT_STABILITY_MS,
   DEFAULT_TIMEOUT_MS,
   openConversation,
   readSnapshot,
   sendMessage,
   startNewConversation,
+  waitForPageReady,
   waitForReply,
   waitForReplyMessage,
 } from "../src/transport/chatgpt-page.js";
@@ -28,6 +30,22 @@ async function caught(promise: Promise<unknown>): Promise<unknown> {
     () => undefined,
     (error: unknown) => error
   );
+}
+
+function composerAppearsAfter(driver: FakePageDriver, snapshots: number): void {
+  let seen = 0;
+  driver.onSnapshotHook = (fake) => {
+    seen += 1;
+    if (seen >= snapshots) fake.composerPresent = true;
+  };
+}
+
+function steppingClock(stepMs: number): () => number {
+  let current = 0;
+  return () => {
+    current += stepMs;
+    return current;
+  };
 }
 
 describe("messageIdFor", () => {
@@ -60,6 +78,38 @@ describe("page flow defaults", () => {
     expect(DEFAULT_POLL_MS).toBe(800);
     expect(DEFAULT_STABILITY_MS).toBe(1_500);
     expect(DEFAULT_TIMEOUT_MS).toBe(600_000);
+    expect(DEFAULT_READY_TIMEOUT_MS).toBe(15_000);
+  });
+});
+
+describe("waitForPageReady", () => {
+  const READY = { pollMs: 1, readyTimeoutMs: 10_000 };
+
+  it("returns the snapshot once the composer hydrates after navigation", async () => {
+    const driver = new FakePageDriver({ composerPresent: false });
+    composerAppearsAfter(driver, 3);
+
+    const snapshot = await waitForPageReady(driver, { ...READY, now: steppingClock(10) });
+
+    expect(snapshot.composerPresent).toBe(true);
+    expect(driver.snapshotCalls).toBe(3);
+  });
+
+  it("reports CHATGPT_LOGIN_REQUIRED while the page asks for login", async () => {
+    const driver = new FakePageDriver({ loginRequired: true, composerPresent: false });
+
+    expectTransportError(await caught(waitForPageReady(driver, { ...READY, now: steppingClock(10) })), "CHATGPT_LOGIN_REQUIRED");
+    expect(driver.snapshotCalls).toBe(1);
+  });
+
+  it("reports CHATGPT_UI_CHANGED when the composer never appears", async () => {
+    const driver = new FakePageDriver({ composerPresent: false });
+
+    expectTransportError(
+      await caught(waitForPageReady(driver, { pollMs: 1, readyTimeoutMs: 35, now: steppingClock(10) })),
+      "CHATGPT_UI_CHANGED"
+    );
+    expect(driver.snapshotCalls).toBe(4);
   });
 });
 
@@ -87,6 +137,30 @@ describe("openConversation", () => {
     expectTransportError(await caught(openConversation(driver, "https://chatgpt.com/")), "CHATGPT_LOGIN_REQUIRED");
     expect(driver.opened).toEqual(["https://chatgpt.com/"]);
   });
+
+  it("waits for the composer to hydrate after opening a conversation", async () => {
+    const driver = new FakePageDriver({ composerPresent: false });
+    composerAppearsAfter(driver, 2);
+
+    await openConversation(driver, "https://chatgpt.com/c/abc-123", {
+      pollMs: 1,
+      readyTimeoutMs: 10_000,
+      now: steppingClock(10),
+    });
+
+    expect(driver.opened).toEqual(["https://chatgpt.com/c/abc-123"]);
+    expect(driver.snapshotCalls).toBe(2);
+  });
+
+  it("reports CHATGPT_UI_CHANGED when the composer never hydrates after opening", async () => {
+    const driver = new FakePageDriver({ composerPresent: false });
+
+    expectTransportError(
+      await caught(openConversation(driver, "https://chatgpt.com/", { pollMs: 1, readyTimeoutMs: 25, now: steppingClock(10) })),
+      "CHATGPT_UI_CHANGED"
+    );
+    expect(driver.snapshotCalls).toBe(3);
+  });
 });
 
 describe("startNewConversation", () => {
@@ -95,6 +169,26 @@ describe("startNewConversation", () => {
     await startNewConversation(driver);
     expect(CHATGPT_NEW_CHAT_URL).toBe("https://chatgpt.com/");
     expect(driver.opened).toEqual([CHATGPT_NEW_CHAT_URL]);
+  });
+
+  it("waits for the composer to hydrate and returns the ready snapshot", async () => {
+    const driver = new FakePageDriver({ composerPresent: false });
+    composerAppearsAfter(driver, 2);
+
+    const snapshot = await startNewConversation(driver, { pollMs: 1, readyTimeoutMs: 10_000, now: steppingClock(10) });
+
+    expect(snapshot.composerPresent).toBe(true);
+    expect(driver.opened).toEqual([CHATGPT_NEW_CHAT_URL]);
+    expect(driver.snapshotCalls).toBe(2);
+  });
+
+  it("reports CHATGPT_UI_CHANGED when the new chat never hydrates", async () => {
+    const driver = new FakePageDriver({ composerPresent: false });
+
+    expectTransportError(
+      await caught(startNewConversation(driver, { pollMs: 1, readyTimeoutMs: 25, now: steppingClock(10) })),
+      "CHATGPT_UI_CHANGED"
+    );
   });
 });
 

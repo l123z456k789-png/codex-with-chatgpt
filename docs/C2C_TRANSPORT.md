@@ -34,16 +34,30 @@ discovery.
 ## First login
 
 Chrome starts on demand with the isolated C2C profile and opens the saved
-conversation. The first run needs a manual login:
+conversation, but the transport window is launched with
+`--remote-debugging-port=0` — and Google blocks sign-in in a browser started
+with a debugging port ("this browser or app may not be secure"). The first
+login therefore has to happen once in a plain window:
 
-1. Run a transport command in a connected workspace, e.g.
+```bash
+c2c browser login
+```
+
+This opens the same dedicated profile (`<state>/chrome-profile`) and the same
+ChatGPT page as a normal, user-facing window: no debugging port, no
+attachment, nothing recorded in `chrome.json`. Log in there (login, CAPTCHA,
+2FA and consent are always human steps; C2C never imports cookies or bypasses
+a challenge), then close the window. The session persists in the C2C profile.
+
+Then use the transport in a connected workspace:
+
+1. Run a transport command, e.g.
    `c2c task start --executor opencode --agent-session <id> --goal "<goal>" --transport chrome`.
-2. If ChatGPT is not logged in, the command fails with
+2. If ChatGPT is still not logged in, the command fails with
    `CHATGPT_LOGIN_REQUIRED` and prints the manual fallback (the pending
-   `[C2C]` message). Nothing was sent and the checkpoint is kept.
-3. The user logs in once in the C2C Chrome window (login, CAPTCHA, 2FA and
-   consent are always human steps; C2C never imports cookies or bypasses a
-   challenge), then the message is delivered without creating a second task:
+   `[C2C]` message). Nothing was sent and the checkpoint is kept. Run
+   `c2c browser login` again, log in and close the window, then deliver the
+   message without creating a second task:
 
    ```bash
    c2c task resume --executor opencode --agent-session <id> --transport chrome
@@ -178,7 +192,7 @@ builds a HANDOFF message from the checkpoint to continue in a replacement chat.
 
 | Situation | Action |
 | --- | --- |
-| Not logged in (`CHATGPT_LOGIN_REQUIRED`) | Log in once in the C2C Chrome window, then `c2c task resume …` (never `task start` again) |
+| Not logged in (`CHATGPT_LOGIN_REQUIRED`) | Run `c2c browser login`, log in and close the window, then `c2c task resume …` (never `task start` again) |
 | Reply pending after `--no-wait` or a timeout | `c2c task resume …` (never resends a confirmed message) |
 | Chrome missing or failed to start | Manual fallback is printed; install Chrome or set `C2C_CHROME_PATH` |
 | Identity mismatch / unparseable reply | Hard failure; nothing is executed or recorded: `c2c doctor -w <workspace> --json`, then retry |
@@ -233,7 +247,9 @@ Chrome or reach chatgpt.com).
 3. Start a small real task in a scratch workspace:
    `c2c task start --executor opencode --agent-session <id> --goal "<small real task>" --transport chrome`.
 4. If the outcome is `CHATGPT_LOGIN_REQUIRED` (LEVEL B): the user logs in once
-   in the C2C Chrome window, the delivery is retried with
+   with `c2c browser login` (the transport window has a debugging port, which
+   Google blocks for sign-in) and closes that window, the delivery is retried
+   with
    `c2c task resume --executor opencode --agent-session <id> --transport chrome`
    (`task start` is not repeated; the INIT checkpoint exists), and the E2E
    continues.

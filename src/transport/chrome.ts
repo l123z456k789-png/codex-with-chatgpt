@@ -153,6 +153,10 @@ function chromeArgs(profileDir: string): string[] {
   ];
 }
 
+function loginChromeArgs(profileDir: string): string[] {
+  return [`--user-data-dir=${profileDir}`, "--no-first-run", "--no-default-browser-check", START_URL];
+}
+
 function isPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -258,6 +262,34 @@ export async function checkChromeHealth(port: number, deps: ChromeDeps = {}): Pr
   } catch {
     return false;
   }
+}
+
+export interface ChromeLoginLaunch {
+  pid?: number;
+  binary: string;
+  profileDir: string;
+}
+
+/**
+ * Open the C2C Chrome profile as a plain user-facing window for the one-time
+ * login. Deliberately no debugging port: Google sign-in rejects a browser
+ * launched with `--remote-debugging-port`, and this window is never attached
+ * to or tracked in `chrome.json` — the user logs in and closes it.
+ */
+export function openChromeForLogin(deps: ChromeDeps = {}): ChromeLoginLaunch {
+  const binary = findChromeBinary(deps);
+  if (!binary) {
+    throw new TransportError(
+      "CHROME_NOT_FOUND",
+      "Google Chrome was not found. Install Google Chrome or set C2C_CHROME_PATH to chrome.exe."
+    );
+  }
+
+  const profileDir = chromeProfileDir();
+  ensureDir(profileDir);
+  const child = (deps.spawnFn ?? spawnChrome)(binary, loginChromeArgs(profileDir));
+  child.unref?.();
+  return { pid: child.pid, binary, profileDir };
 }
 
 export async function closeChrome(_deps: ChromeDeps = {}): Promise<{ closed: boolean; pid?: number }> {

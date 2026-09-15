@@ -80,9 +80,10 @@ Chrome transport is opt-in; the default is \`--transport manual\`. In manual mod
 ## Browser and preferences
 
 - \`c2c browser status\` shows the C2C-owned Chrome instance; \`c2c browser close\` terminates it when the user is done. Chrome is reused between commands.
+- First login: \`c2c browser login\` opens the C2C profile as a plain window for the one-time ChatGPT login. That window has no debugging port, so Google sign-in works there; log in, then close it. The transport window is launched with a debugging port and Google blocks sign-in in it.
 - \`c2c prefs get\` shows the machine-wide settings; \`c2c prefs set --transport chrome\` makes Chrome the default on this machine. Resolution order: CLI flag, then \`C2C_TRANSPORT\`, then prefs, then \`manual\`.
 - Login, CAPTCHA and 2FA are human steps in the C2C Chrome window: ask the user. Never import cookies, never read browser storage and never bypass a challenge.
-- If a command reports \`CHATGPT_LOGIN_REQUIRED\`, ask the user to log in once in the C2C Chrome window and then retry with the \`c2c task resume\` command above; never repeat \`c2c task start\`, because the active checkpoint would be rejected.
+- If a command reports \`CHATGPT_LOGIN_REQUIRED\`, tell the user to run \`c2c browser login\`, log in to ChatGPT in the opened window and close it, then retry with the \`c2c task resume\` command above; never repeat \`c2c task start\`, because the active checkpoint would be rejected.
 - If the workspace connection is broken or a hard transport failure (identity mismatch, unparseable reply) is reported, run \`c2c doctor\`; never record a plan or verdict ChatGPT did not send.
 `;
 }

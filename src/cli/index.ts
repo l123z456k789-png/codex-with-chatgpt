@@ -85,7 +85,7 @@ import {
   type RoundtripOutcome,
 } from "../protocol/roundtrip.js";
 import { ChatGptTransport } from "../transport/chatgpt-transport.js";
-import { checkChromeHealth, closeChrome, ensureChrome, readChromeState } from "../transport/chrome.js";
+import { checkChromeHealth, closeChrome, ensureChrome, openChromeForLogin, readChromeState } from "../transport/chrome.js";
 import { createPlaywrightDriver } from "../transport/driver.js";
 import { isTransportError, TransportError } from "../transport/errors.js";
 import {
@@ -1747,7 +1747,7 @@ taskCmd
 
 // ---------------------------------------------------------------- browser (C2C Chrome)
 
-const browserCmd = program.command("browser").description("Inspect or close the C2C-owned Chrome instance");
+const browserCmd = program.command("browser").description("Inspect, log in to or close the C2C-owned Chrome instance");
 
 browserCmd
   .command("status", { isDefault: true })
@@ -1785,6 +1785,26 @@ browserCmd
       }
       if (result.closed) check(`Chrome closed (pid ${result.pid}).`);
       else say("No C2C Chrome instance was running.");
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+browserCmd
+  .command("login")
+  .description("Open the C2C Chrome profile for the one-time manual ChatGPT login (no debugging port)")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { json: boolean }) => {
+    try {
+      const result = openChromeForLogin();
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, ...result }));
+        return;
+      }
+      check("Chrome opened with the C2C profile.");
+      say(
+        "Log in to ChatGPT in the opened window (Google sign-in works here because this launch has no debugging port). Close the window when done; the C2C profile keeps the session."
+      );
     } catch (error) {
       handleCliError(error, opts.json);
     }

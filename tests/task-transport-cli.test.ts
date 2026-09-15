@@ -273,4 +273,16 @@ describe("c2c browser", () => {
       expect(lastJson(closed.stdout)).toEqual({ ok: true, closed: false });
     });
   });
+
+  windowsOnly("reports a stable JSON error when Chrome is missing (browser login)", () => {
+    withTransportEnvironment(({ env, stateDir }) => {
+      const login = runCli(["browser", "login", "--json"], env);
+
+      expect(login.status).toBe(1);
+      const json = lastJson(login.stdout);
+      expect(json.ok).toBe(false);
+      expect(String(json.error)).toMatch(/Google Chrome was not found/);
+      expect(fs.existsSync(path.join(stateDir, "transport", "chrome.json"))).toBe(false);
+    });
+  });
 });

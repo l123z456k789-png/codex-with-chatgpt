@@ -43,7 +43,7 @@ async function caught(promise: Promise<unknown>): Promise<unknown> {
 }
 
 function makeTransport(driver: FakePageDriver): ChatGptTransport {
-  return new ChatGptTransport(driver, CONTEXT, { pollMs: 1, stabilityMs: 5 });
+  return new ChatGptTransport(driver, CONTEXT, { pollMs: 1, stabilityMs: 5, readyTimeoutMs: 40 });
 }
 
 function deliverInput(overrides: Partial<DeliverInput> = {}): DeliverInput {
