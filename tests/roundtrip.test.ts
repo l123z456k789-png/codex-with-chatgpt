@@ -651,6 +651,17 @@ describe("roundtrip", () => {
       expect(outcome.protocolState).toBe("INIT");
     });
 
+    it("persists an explicit review limit on a manual resume that still owes a delivery", async () => {
+      seedExecuted(TASK_ID, 1, ["src/a.ts"]);
+      expect(readAgentSessionCheckpoint(workspace.id, EXECUTOR, SESSION)?.waitingFor).toBe("GPT_REVIEW");
+
+      const outcome = await resumeWithTransport(scope(), { transport: null, reviewIterations: "until_done" });
+
+      expect("transport" in outcome).toBe(false);
+      expect(outcome.checkpoint.reviewIterations).toBe("until_done");
+      expect(readAgentSessionCheckpoint(workspace.id, EXECUTOR, SESSION)?.reviewIterations).toBe("until_done");
+    });
+
     it("applies the chosen limit when paused at the review limit", async () => {
       seedPlan(TASK_ID, 1);
       saveAgentSessionCheckpoint(workspace.id, EXECUTOR, SESSION, {

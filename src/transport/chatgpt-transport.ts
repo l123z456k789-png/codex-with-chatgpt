@@ -111,6 +111,13 @@ export class ChatGptTransport {
     const chatUrl = input.chatUrl;
     if (!input.forceNewChat && chatUrl) {
       await asTransportError("Opening the ChatGPT conversation", () => openConversation(this.driver, chatUrl));
+      const snapshot = await asTransportError("Reading the conversation", () => readSnapshot(this.driver));
+      if (!isChatGptConversationUrl(snapshot.url)) {
+        throw new TransportError(
+          "CONVERSATION_NOT_FOUND",
+          `The saved ChatGPT conversation is no longer available: the page landed on ${JSON.stringify(snapshot.url)}. Start a fresh conversation with --new-chat.`
+        );
+      }
       return chatUrl;
     }
     return this.bootstrap();

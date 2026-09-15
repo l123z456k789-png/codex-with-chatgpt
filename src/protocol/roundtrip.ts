@@ -479,9 +479,10 @@ export async function resumeWithTransport(scope: TaskScope, deps: RoundtripDeps 
     (checkpoint.waitingFor === "USER" && checkpoint.protocolState === "EXECUTED_SENT");
 
   if (!transport || !needsDelivery) {
-    const message = needsDelivery ? pendingMessage(scope, checkpoint) : undefined;
+    const current = needsDelivery ? persistReviewLimit(scope, checkpoint.taskId, flagValue, prefs, checkpoint) : checkpoint;
+    const message = needsDelivery ? pendingMessage(scope, current) : undefined;
     return {
-      ...stateForCheckpoint(scope, checkpoint),
+      ...stateForCheckpoint(scope, current),
       ...connectedInfo(workspaceId),
       ...(message !== undefined ? { message } : {}),
     };
@@ -495,13 +496,7 @@ export async function resumeWithTransport(scope: TaskScope, deps: RoundtripDeps 
     );
   }
 
-  let persisted = checkpoint;
-  if (flagValue !== null) {
-    persisted = saveAgentSessionCheckpoint(workspaceId, executor, agentSession, {
-      taskId: checkpoint.taskId,
-      checkpoint: { reviewIterations: resolveReviewIterations(prefs.defaultReviewIterations, flagValue) },
-    });
-  }
+  const persisted = persistReviewLimit(scope, checkpoint.taskId, flagValue, prefs, checkpoint);
   const limit = resolveReviewIterations(persisted.reviewIterations ?? prefs.defaultReviewIterations, null);
   const delivery: DeliverInput = {
     taskId: checkpoint.taskId,

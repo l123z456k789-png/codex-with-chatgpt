@@ -121,6 +121,20 @@ describe("ChatGptTransport.ensureConversation", () => {
     expect(driver.sendClicks).toBe(0);
   });
 
+  it("rejects a stale chat URL when the page lands outside the conversation", async () => {
+    const driver = new FakePageDriver({ url: CHAT_URL });
+    driver.open = async (url: string) => {
+      driver.opened.push(url);
+      driver.url = "https://chatgpt.com/";
+    };
+    const transport = makeTransport(driver);
+
+    const error = expectTransportError(await caught(transport.ensureConversation({ chatUrl: CHAT_URL })), "CONVERSATION_NOT_FOUND");
+    expect(error.message).toContain("--new-chat");
+    expect(driver.typeCalls).toBe(0);
+    expect(driver.sendClicks).toBe(0);
+  });
+
   it("rejects a non-ChatGPT chat URL before touching the browser", async () => {
     const driver = new FakePageDriver({ url: CHAT_URL });
     const transport = makeTransport(driver);
