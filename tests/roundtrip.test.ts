@@ -202,6 +202,22 @@ describe("roundtrip", () => {
       expect(rotation).toMatchObject({ tasks: 1, roundtrips: 1, abnormalSignals: 0, chatUrl: CONNECTED_URL });
     });
 
+    it("records an INIT PLAN reply without ITERATION at iteration 1", async () => {
+      const fake = new FakeTransport();
+      const plan = exchange("PLAN", TASK_ID, null, "Plan body without an iteration header.");
+      fake.deliverQueue.push(
+        deliverOutcome({ reply: plan.reply, replyText: plan.replyText, signals: ["missing_iteration"] })
+      );
+
+      const outcome = await startTaskWithTransport(scope(), { goal: GOAL, taskId: TASK_ID }, { transport: asTransport(fake), prefs: PREFS });
+
+      expect(outcome.transport?.signals).toEqual(["missing_iteration"]);
+      expect(outcome.protocolState).toBe("PLAN_RECEIVED");
+      expect(outcome.waitingFor).toBe("none");
+      expect(outcome.iteration).toBe(1);
+      expect(readAgentSessionCheckpoint(workspace.id, EXECUTOR, SESSION)?.iteration).toBe(1);
+    });
+
     it("returns non-PLAN replies without touching the checkpoint", async () => {
       const fake = new FakeTransport();
       const done = exchange("DONE", TASK_ID, 0, "Nothing to do.");
@@ -367,6 +383,31 @@ describe("roundtrip", () => {
       expect(fake.deliverInputs[0]).toMatchObject({ state: "EXECUTED", iteration: 1, chatUrl: CONNECTED_URL });
       expect(fake.deliverInputs[0].message).toContain("[C2C]\nSTATE: EXECUTED");
       expect(readRotationState(workspace.id).roundtrips).toBe(1);
+    });
+
+    it("records a PLAN reply without ITERATION at the continuation iteration", async () => {
+      seedPlan(TASK_ID, 1);
+      const fake = new FakeTransport();
+      const plan = exchange("PLAN", TASK_ID, null, "Plan body without an iteration header.");
+      fake.deliverQueue.push(
+        deliverOutcome({ reply: plan.reply, replyText: plan.replyText, signals: ["missing_iteration"] })
+      );
+
+      const outcome = await executedWithTransport(
+        scope(),
+        { taskId: TASK_ID, iteration: 1, changedFiles: ["src/b.ts"], tests: "6 passed" },
+        { transport: asTransport(fake), prefs: PREFS }
+      );
+
+      expect(outcome.transport?.signals).toEqual(["missing_iteration"]);
+      expect(outcome.decision).toEqual({ action: "continue", iteration: 2, reason: "REVIEW_CONTINUE" });
+      expect(outcome.protocolState).toBe("PLAN_RECEIVED");
+      expect(outcome.waitingFor).toBe("none");
+      expect(outcome.iteration).toBe(2);
+      expect(outcome.checkpoint.iteration).toBe(2);
+      // The next `task executed --iteration 2` uses a fresh taskId:EXECUTED:2
+      // ledger key instead of re-running the already-confirmed iteration 1.
+      expect(readAgentSessionCheckpoint(workspace.id, EXECUTOR, SESSION)?.iteration).toBe(2);
     });
 
     it("records the terminal reply and keeps waiting", async () => {

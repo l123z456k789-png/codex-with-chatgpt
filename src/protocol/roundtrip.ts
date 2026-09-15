@@ -217,7 +217,7 @@ function applyReviewOutcome(
   scope: TaskScope,
   delivered: DeliverOutcome,
   current: TaskCheckpoint,
-  options: { taskId: string; reviewRound: number; limit: ReviewIterations; fallbackIteration: number }
+  options: { taskId: string; reviewRound: number; limit: ReviewIterations }
 ): ReviewOutcome {
   const decision = evaluateReviewReply({
     replyState: reviewStateOf(delivered.reply),
@@ -230,7 +230,9 @@ function applyReviewOutcome(
     return { state: stateForCheckpoint(scope, current), decision };
   }
 
-  const iteration = delivered.reply.iteration ?? options.fallbackIteration;
+  // A reply without ITERATION is accepted; the PLAN it carries is for the next
+  // round (the policy's continuation target), never the round just executed.
+  const iteration = delivered.reply.iteration ?? options.reviewRound + 1;
   if (decision.action === "continue") {
     return { state: markPlan(scope, { taskId: options.taskId, iteration }), decision };
   }
@@ -343,7 +345,7 @@ export async function startTaskWithTransport(
     if (delivered.reply.state === "PLAN") {
       const planned = markPlan(scope, {
         taskId: started.taskId,
-        iteration: delivered.reply.iteration ?? checkpoint.iteration,
+        iteration: delivered.reply.iteration ?? checkpoint.iteration + 1,
       });
       return {
         ...planned,
@@ -418,7 +420,6 @@ export async function executedWithTransport(
       taskId: executed.taskId,
       reviewRound: executed.iteration,
       limit,
-      fallbackIteration: executed.iteration,
     });
     return {
       ...applied.state,
@@ -526,7 +527,7 @@ export async function resumeWithTransport(scope: TaskScope, deps: RoundtripDeps 
       if (delivered.reply.state === "PLAN") {
         const planned = markPlan(scope, {
           taskId: checkpoint.taskId,
-          iteration: delivered.reply.iteration ?? checkpoint.iteration,
+          iteration: delivered.reply.iteration ?? checkpoint.iteration + 1,
         });
         return {
           ...planned,
@@ -547,7 +548,6 @@ export async function resumeWithTransport(scope: TaskScope, deps: RoundtripDeps 
       taskId: checkpoint.taskId,
       reviewRound: checkpoint.iteration,
       limit,
-      fallbackIteration: checkpoint.iteration,
     });
     return {
       ...applied.state,
