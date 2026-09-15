@@ -250,6 +250,16 @@ export async function ensureChrome(deps: ChromeDeps = {}): Promise<{ instance: C
   );
 }
 
+/** Thin, injectable wrapper over the debugging-port probe for `browser status`. */
+export async function checkChromeHealth(port: number, deps: ChromeDeps = {}): Promise<boolean> {
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) return false;
+  try {
+    return await (deps.probe ?? probeChromePort)(port);
+  } catch {
+    return false;
+  }
+}
+
 export async function closeChrome(_deps: ChromeDeps = {}): Promise<{ closed: boolean; pid?: number }> {
   const existing = readChromeState();
   if (!existing) return { closed: false };

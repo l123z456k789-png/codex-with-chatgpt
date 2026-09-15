@@ -184,6 +184,49 @@ describe("mergeSession", () => {
   });
 });
 
+describe("mergeSession review iterations", () => {
+  function withCheckpoint(extra: Record<string, unknown> = {}): ReturnType<typeof mergeSession> {
+    return mergeSession(
+      {
+        url: "https://chatgpt.com/c/keep",
+        taskId: "c2c_ab12",
+        savedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        checkpoint: {
+          protocolState: "EXECUTED_SENT",
+          waitingFor: "GPT_REVIEW",
+          ...extra,
+        } as Parameters<typeof mergeSession>[1]["checkpoint"],
+      }
+    );
+  }
+
+  it("persists a numeric review limit on the checkpoint", () => {
+    const next = withCheckpoint({ reviewIterations: 5 });
+    expect(next.checkpoint?.reviewIterations).toBe(5);
+  });
+
+  it("persists until_done as a review limit", () => {
+    const next = withCheckpoint({ reviewIterations: "until_done" });
+    expect(next.checkpoint?.reviewIterations).toBe("until_done");
+  });
+
+  it("keeps the persisted limit when other checkpoint fields change", () => {
+    const previous = withCheckpoint({ reviewIterations: 4 });
+    const next = mergeSession(previous, {
+      checkpoint: { protocolState: "PLAN_RECEIVED", waitingFor: "none" },
+    });
+    expect(next.checkpoint?.reviewIterations).toBe(4);
+  });
+
+  it("rejects an invalid review limit", () => {
+    expect(() => withCheckpoint({ reviewIterations: 0 })).toThrow(/review-iterations/);
+    expect(() => withCheckpoint({ reviewIterations: -1 })).toThrow(/review-iterations/);
+    expect(() => withCheckpoint({ reviewIterations: 1.5 })).toThrow(/review-iterations/);
+  });
+});
+
 describe("clearChatPointer", () => {
   const dirs: string[] = [];
 

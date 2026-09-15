@@ -390,6 +390,66 @@ describe("ChatGptTransport.deliver", () => {
   });
 });
 
+describe("ChatGptTransport.send", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = isolateStateDir();
+  });
+
+  afterEach(() => {
+    cleanup(stateDir);
+    delete process.env.C2C_STATE_DIR;
+  });
+
+  it("sends and confirms without waiting for a reply", async () => {
+    const driver = new FakePageDriver({ url: CHAT_URL });
+    const transport = makeTransport(driver);
+
+    const outcome = await transport.send(deliverInput());
+
+    expect(driver.sendClicks).toBe(1);
+    expect(outcome).toEqual({
+      chatUrl: CHAT_URL,
+      sentMessageId: driver.messages[0].id,
+      reusedConfirmation: false,
+    });
+    const record = readDelivery(WORKSPACE_ID, KEY);
+    expect(record?.status).toBe("confirmed");
+    expect(record?.userMessageId).toBe(outcome.sentMessageId);
+    expect(record?.conversationUrl).toBe(CHAT_URL);
+  });
+
+  it("reuses a matching last user message and repairs the ledger", async () => {
+    const driver = new FakePageDriver({ url: CHAT_URL });
+    const existing = driver.appendUserMessage(MESSAGE.replace(/\s+/g, " "));
+    prepareDelivery(WORKSPACE_ID, { taskId: TASK_ID, state: "EXECUTED", iteration: 2, content: MESSAGE });
+    const transport = makeTransport(driver);
+
+    const outcome = await transport.send(deliverInput());
+
+    expect(outcome.reusedConfirmation).toBe(true);
+    expect(outcome.sentMessageId).toBe(existing.id);
+    expect(driver.sendClicks).toBe(0);
+    expect(readDelivery(WORKSPACE_ID, KEY)?.status).toBe("confirmed");
+  });
+
+  it("fails as TRANSPORT_UNAVAILABLE when the page cannot be read", async () => {
+    const driver = new FakePageDriver({ url: CHAT_URL });
+    const original = driver.snapshot.bind(driver);
+    let calls = 0;
+    driver.snapshot = async () => {
+      calls += 1;
+      if (calls >= 2) throw new Error("CDP connection lost");
+      return original();
+    };
+    const transport = makeTransport(driver);
+
+    const error = expectTransportError(await caught(transport.send(deliverInput())), "TRANSPORT_UNAVAILABLE");
+    expect(error.message).toContain("CDP connection lost");
+  });
+});
+
 describe("ChatGptTransport.close", () => {
   it("disconnects the driver without touching Chrome", async () => {
     const driver = new ClosableFakeDriver();

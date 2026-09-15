@@ -29,6 +29,7 @@ import { getStateDir } from "../config/paths.js";
 import {
   mergeMachinePrefs,
   readMachinePrefs,
+  resolveTransportMode,
   TASK_MODES,
   TRANSPORT_MODES,
   type MachinePrefsPatch,
@@ -67,6 +68,7 @@ import {
 import { appendExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput } from "../execution/output.js";
 import { normalizeAgentSessionId, normalizeExecutorId } from "../session/agent-session.js";
+import { requireConnectedSession } from "../session/connected.js";
 import {
   finishTask,
   handoffTask,
@@ -75,6 +77,17 @@ import {
   readTaskStatus,
   startTask,
 } from "../protocol/lifecycle.js";
+import {
+  buildResumeCommand,
+  executedWithTransport,
+  resumeWithTransport,
+  startTaskWithTransport,
+  type RoundtripOutcome,
+} from "../protocol/roundtrip.js";
+import { ChatGptTransport } from "../transport/chatgpt-transport.js";
+import { checkChromeHealth, closeChrome, ensureChrome, readChromeState } from "../transport/chrome.js";
+import { createPlaywrightDriver } from "../transport/driver.js";
+import { isTransportError, TransportError } from "../transport/errors.js";
 import {
   claudeGuardHook,
   claudePostHook,
@@ -1256,8 +1269,8 @@ interface PrintableTaskResult {
   protocolState: string;
   workspaceName: string;
   workspaceRoot: string;
-  chatUrl?: string;
-  connectorName?: string;
+  chatUrl?: string | null;
+  connectorName?: string | null;
   message?: string;
 }
 
@@ -1273,6 +1286,163 @@ function printTaskResult(result: PrintableTaskResult): void {
   }
 }
 
+function printTransportResult(result: RoundtripOutcome): void {
+  check(`Task ${result.taskId} · ${result.protocolState} (iteration ${result.iteration})`);
+  say(`Workspace: ${result.workspaceName} (${result.workspaceRoot})`);
+  if (result.chatUrl) say(`ChatGPT: ${result.chatUrl}`);
+  if (result.connectorName) say(`Connector: ${result.connectorName}`);
+
+  const transport = result.transport;
+  if (transport?.ok) {
+    if (transport.chatUrl && transport.chatUrl !== result.chatUrl) say(`Conversation: ${transport.chatUrl}`);
+    if (transport.awaitingReply) {
+      say(
+        transport.reusedConfirmation
+          ? "The pending message was already confirmed in the conversation; nothing was sent again."
+          : "Message sent; ChatGPT has not replied yet."
+      );
+      if (result.message) {
+        say("");
+        say("Pending [C2C] message:");
+        say(result.message);
+      }
+      say("");
+      say(`Resume with: ${buildResumeCommand(result.executor, result.agentSession)}`);
+      return;
+    }
+    say(
+      `ChatGPT replied: ${transport.reply?.state ?? "UNPARSEABLE"}${
+        transport.reusedConfirmation ? " (reused an already-sent message)" : ""
+      }`
+    );
+    if (transport.replyText) {
+      say("");
+      say(transport.replyText);
+    }
+    if (result.decision) {
+      say("");
+      say(`Review decision: ${result.decision.action} (${result.decision.reason})`);
+    }
+    if (result.choices && result.choices.length > 0) {
+      say("");
+      say("Review limit reached. Choose one:");
+      for (const choice of result.choices) say(`- ${choice}`);
+    }
+    if (result.decision?.action === "no_progress") {
+      say("");
+      say("No progress detected between the last two review rounds; the task is paused.");
+      say(`Resume with: ${buildResumeCommand(result.executor, result.agentSession)}`);
+    }
+    return;
+  }
+
+  if (transport && !transport.ok) {
+    cross(`chrome transport failed: ${transport.code}${transport.detail ? ` — ${transport.detail}` : ""}`);
+    say("");
+    say("Fall back to manual. Send this message to ChatGPT yourself:");
+    say("");
+    say(transport.manualFallback);
+    return;
+  }
+
+  if (result.message) {
+    say("");
+    say("Send this message to ChatGPT:");
+    say(result.message);
+  }
+  if (result.protocolState === "PLAN_RECEIVED" && result.waitingFor === "none") {
+    say(`Plan accepted; execute iteration ${result.iteration} and record it with \`c2c task executed\`.`);
+  }
+}
+
+async function openChromeTransport(workspace: Workspace): Promise<ChatGptTransport> {
+  const connected = requireConnectedSession(workspace.id);
+  const { instance } = await ensureChrome();
+  const driver = await createPlaywrightDriver(instance.port);
+  return new ChatGptTransport(driver, {
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    connectorName: connected.connectorName,
+  });
+}
+
+/** R6: a failed Chrome startup becomes a manual fallback, never a hard failure. */
+async function tryOpenChromeTransport(
+  workspace: Workspace
+): Promise<{ transport: ChatGptTransport | null; failure: TransportError | null }> {
+  try {
+    return { transport: await openChromeTransport(workspace), failure: null };
+  } catch (error) {
+    if (isTransportError(error)) return { transport: null, failure: error };
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      transport: null,
+      failure: new TransportError("TRANSPORT_UNAVAILABLE", `Cannot attach to Chrome: ${reason}`),
+    };
+  }
+}
+
+interface TaskActionOptions {
+  workspace: Workspace;
+  transportFlag?: string;
+  wait: boolean;
+  timeoutMs?: number;
+  reviewIterations?: string;
+  json: boolean;
+  run: (transport: ChatGptTransport | null) => Promise<RoundtripOutcome>;
+}
+
+async function runTaskAction(options: TaskActionOptions): Promise<void> {
+  const mode = resolveTransportMode(options.transportFlag);
+  if (mode === "manual") {
+    const result = await options.run(null);
+    if (options.json) {
+      say(JSON.stringify(result));
+      return;
+    }
+    printTaskResult(result);
+    if (!result.message && result.protocolState === "PLAN_RECEIVED" && result.waitingFor === "none") {
+      say(`Plan accepted; execute iteration ${result.iteration} and record it with \`c2c task executed\`.`);
+    }
+    return;
+  }
+
+  const { transport, failure } = await tryOpenChromeTransport(options.workspace);
+  try {
+    const result = await options.run(transport);
+    if (failure) {
+      const transportFailure = {
+        ok: false as const,
+        code: failure.code,
+        detail: failure.detail ?? failure.message,
+        manualFallback: result.message ?? "",
+      };
+      if (options.json) {
+        say(JSON.stringify({ ...result, transport: transportFailure }));
+        return;
+      }
+      cross(`chrome transport failed: ${failure.code} — ${failure.detail ?? failure.message}`);
+      printTaskResult(result);
+      return;
+    }
+    if (options.json) {
+      say(JSON.stringify(result));
+      return;
+    }
+    printTransportResult(result);
+  } finally {
+    if (transport) await transport.close().catch(() => undefined);
+  }
+}
+
+function parseWaitSecondsOption(value: string): number {
+  return parsePrefPositiveInteger("wait-seconds", value);
+}
+
+function waitSecondsToMs(seconds: number | undefined): number | undefined {
+  return seconds === undefined ? undefined : seconds * 1000;
+}
+
 const taskCmd = program
   .command("task")
   .description("Drive the agent-neutral C2C task protocol (INIT/PLAN/EXECUTED/HANDOFF/DONE)");
@@ -1285,24 +1455,45 @@ taskCmd
   .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
   .requiredOption("--goal <text>", "task goal, one paragraph")
   .option("--task <id>", "explicit task id (default: generated)")
+  .option("--transport <mode>", "manual (default) or chrome")
+  .option("--wait-seconds <n>", "reply timeout in seconds (chrome only)", parseWaitSecondsOption)
+  .option("--review-iterations <value>", "positive integer or until_done")
+  .option("--new-chat", "bootstrap a fresh ChatGPT conversation for this task", false)
+  .option("--no-wait", "send without waiting for the ChatGPT reply (chrome)")
   .option("--json", "machine-readable output", false)
   .action(
-    (opts: {
+    async (opts: {
       workspace?: string;
       executor: string;
       agentSession: string;
       goal: string;
       task?: string;
+      transport?: string;
+      waitSeconds?: number;
+      reviewIterations?: string;
+      newChat: boolean;
+      wait: boolean;
       json: boolean;
     }) => {
       try {
         const workspace = new Workspace(resolveWorkspace(opts.workspace));
-        const result = startTask(
-          { workspace, executor: opts.executor, agentSession: opts.agentSession },
-          { goal: opts.goal, taskId: opts.task }
-        );
-        if (opts.json) say(JSON.stringify(result));
-        else printTaskResult(result);
+        const scope = { workspace, executor: opts.executor, agentSession: opts.agentSession };
+        const prefs = readMachinePrefs();
+        const timeoutMs = waitSecondsToMs(opts.waitSeconds);
+        await runTaskAction({
+          workspace,
+          transportFlag: opts.transport,
+          wait: opts.wait,
+          timeoutMs,
+          reviewIterations: opts.reviewIterations,
+          json: opts.json,
+          run: (transport) =>
+            startTaskWithTransport(
+              scope,
+              { goal: opts.goal, taskId: opts.task, newChat: opts.newChat },
+              { transport, prefs, wait: opts.wait, timeoutMs, reviewIterations: opts.reviewIterations }
+            ),
+        });
       } catch (error) {
         handleCliError(error, opts.json);
       }
@@ -1359,9 +1550,13 @@ taskCmd
   .option("--output <text>", "command output (prefer --output-file for long logs)")
   .option("--output-file <path>", "read command output from a local file")
   .option("--exit-code <n>", "numeric exit code of that command", parseInteger)
+  .option("--transport <mode>", "manual (default) or chrome")
+  .option("--wait-seconds <n>", "reply timeout in seconds (chrome only)", parseWaitSecondsOption)
+  .option("--review-iterations <value>", "positive integer or until_done")
+  .option("--no-wait", "send without waiting for the ChatGPT reply (chrome)")
   .option("--json", "machine-readable output", false)
   .action(
-    (opts: {
+    async (opts: {
       workspace?: string;
       executor: string;
       agentSession: string;
@@ -1375,10 +1570,17 @@ taskCmd
       output?: string;
       outputFile?: string;
       exitCode?: number;
+      transport?: string;
+      waitSeconds?: number;
+      reviewIterations?: string;
+      wait: boolean;
       json: boolean;
     }) => {
       try {
         const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const scope = { workspace, executor: opts.executor, agentSession: opts.agentSession };
+        const prefs = readMachinePrefs();
+        const timeoutMs = waitSecondsToMs(opts.waitSeconds);
         const rawOutput =
           opts.outputFile !== undefined
             ? readCappedText(path.resolve(opts.outputFile), MAX_RECORD_OUTPUT_READ)
@@ -1387,20 +1589,28 @@ taskCmd
           opts.command && rawOutput !== undefined
             ? { command: opts.command, raw: rawOutput, exitCode: opts.exitCode ?? null }
             : undefined;
-        const result = markExecuted(
-          { workspace, executor: opts.executor, agentSession: opts.agentSession },
-          {
-            taskId: opts.task,
-            iteration: opts.iteration,
-            changedFiles: parseChangedFiles(opts.changedFiles),
-            tests: opts.tests ?? null,
-            exitStatus: opts.exitStatus,
-            notes: opts.notes,
-            output,
-          }
-        );
-        if (opts.json) say(JSON.stringify(result));
-        else printTaskResult(result);
+        await runTaskAction({
+          workspace,
+          transportFlag: opts.transport,
+          wait: opts.wait,
+          timeoutMs,
+          reviewIterations: opts.reviewIterations,
+          json: opts.json,
+          run: (transport) =>
+            executedWithTransport(
+              scope,
+              {
+                taskId: opts.task,
+                iteration: opts.iteration,
+                changedFiles: parseChangedFiles(opts.changedFiles),
+                tests: opts.tests ?? null,
+                exitStatus: opts.exitStatus,
+                notes: opts.notes,
+                output,
+              },
+              { transport, prefs, wait: opts.wait, timeoutMs, reviewIterations: opts.reviewIterations }
+            ),
+        });
       } catch (error) {
         handleCliError(error, opts.json);
       }
@@ -1479,6 +1689,97 @@ taskCmd
           workspaceRoot: result.workspaceRoot,
         });
       }
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+taskCmd
+  .command("resume")
+  .description("Resume the active task through the transport without resending a delivered message")
+  .option("-w, --workspace <path>")
+  .requiredOption("--executor <id>", "executor id, e.g. opencode", parseTaskExecutor)
+  .requiredOption("--agent-session <id>", "stable id of this agent session", parseTaskAgentSession)
+  .option("--transport <mode>", "manual (default) or chrome")
+  .option("--wait-seconds <n>", "reply timeout in seconds (chrome only)", parseWaitSecondsOption)
+  .option("--review-iterations <value>", "positive integer or until_done")
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: {
+      workspace?: string;
+      executor: string;
+      agentSession: string;
+      transport?: string;
+      waitSeconds?: number;
+      reviewIterations?: string;
+      json: boolean;
+    }) => {
+      try {
+        const workspace = new Workspace(resolveWorkspace(opts.workspace));
+        const scope = { workspace, executor: opts.executor, agentSession: opts.agentSession };
+        const prefs = readMachinePrefs();
+        const timeoutMs = waitSecondsToMs(opts.waitSeconds);
+        await runTaskAction({
+          workspace,
+          transportFlag: opts.transport,
+          wait: true,
+          timeoutMs,
+          reviewIterations: opts.reviewIterations,
+          json: opts.json,
+          run: (transport) =>
+            resumeWithTransport(scope, {
+              transport,
+              prefs,
+              timeoutMs,
+              reviewIterations: opts.reviewIterations,
+            }),
+        });
+      } catch (error) {
+        handleCliError(error, opts.json);
+      }
+    }
+  );
+
+// ---------------------------------------------------------------- browser (C2C Chrome)
+
+const browserCmd = program.command("browser").description("Inspect or close the C2C-owned Chrome instance");
+
+browserCmd
+  .command("status", { isDefault: true })
+  .description("Show the recorded C2C Chrome instance and probe its debugging port")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { json: boolean }) => {
+    try {
+      const instance = readChromeState();
+      const healthy = instance ? await checkChromeHealth(instance.port) : false;
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, instance, healthy }));
+        return;
+      }
+      if (!instance) {
+        say("No C2C Chrome instance is running.");
+        return;
+      }
+      if (healthy) check(`Chrome is running (pid ${instance.pid}, port ${instance.port}).`);
+      else cross(`Chrome pid ${instance.pid} is recorded, but port ${instance.port} is not responding.`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+browserCmd
+  .command("close")
+  .description("Terminate the C2C-owned Chrome instance")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { json: boolean }) => {
+    try {
+      const result = await closeChrome();
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, ...result }));
+        return;
+      }
+      if (result.closed) check(`Chrome closed (pid ${result.pid}).`);
+      else say("No C2C Chrome instance was running.");
     } catch (error) {
       handleCliError(error, opts.json);
     }

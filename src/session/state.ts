@@ -40,6 +40,8 @@ export interface TaskCheckpoint {
   nextExpectedStep?: string;
   chatUrl?: string;
   projectUrl?: string;
+  /** Per-task review limit override; absent means "use machine prefs". */
+  reviewIterations?: number | "until_done";
   updatedAt: string;
 }
 
@@ -223,6 +225,14 @@ export function mergeSession(previous: SavedSession | null, patch: SessionPatch)
     if (!WAITING_FOR.includes(waitingFor)) {
       throw new Error(`waiting-for must be one of ${WAITING_FOR.join(", ")}`);
     }
+    const reviewIterations = patch.checkpoint.reviewIterations ?? previous?.checkpoint?.reviewIterations;
+    if (
+      reviewIterations !== undefined &&
+      reviewIterations !== "until_done" &&
+      (!Number.isSafeInteger(reviewIterations) || reviewIterations < 1)
+    ) {
+      throw new Error("review-iterations must be a positive integer or until_done");
+    }
     checkpoint = {
       taskId,
       iteration,
@@ -246,6 +256,7 @@ export function mergeSession(previous: SavedSession | null, patch: SessionPatch)
       ),
       chatUrl: patch.checkpoint.chatUrl ?? previous?.checkpoint?.chatUrl ?? url,
       projectUrl: patch.checkpoint.projectUrl ?? previous?.checkpoint?.projectUrl ?? projectUrl,
+      ...(reviewIterations !== undefined ? { reviewIterations } : {}),
       updatedAt: new Date().toISOString(),
     };
   }

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TransportError } from "../src/transport/errors.js";
 import {
+  checkChromeHealth,
   chromeStateFile,
   closeChrome,
   ensureChrome,
@@ -361,6 +362,34 @@ describe("ensureChrome", () => {
     expect(calls).toHaveLength(1);
     expect(result.instance.port).toBe(9_333);
     expect(readChromeState()?.port).toBe(9_333);
+  });
+});
+
+describe("checkChromeHealth", () => {
+  it("returns the injected probe result for a valid port", async () => {
+    const probe = vi.fn(async (port: number) => port === 9_333);
+
+    await expect(checkChromeHealth(9_333, { probe })).resolves.toBe(true);
+    await expect(checkChromeHealth(9_222, { probe })).resolves.toBe(false);
+    expect(probe).toHaveBeenCalledWith(9_333);
+    expect(probe).toHaveBeenCalledWith(9_222);
+  });
+
+  it("never probes an invalid port", async () => {
+    const probe = vi.fn(async () => true);
+
+    await expect(checkChromeHealth(0, { probe })).resolves.toBe(false);
+    await expect(checkChromeHealth(65_536, { probe })).resolves.toBe(false);
+    await expect(checkChromeHealth(Number.NaN, { probe })).resolves.toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("reports unhealthy when the probe throws", async () => {
+    const probe = async (): Promise<boolean> => {
+      throw new Error("connection refused");
+    };
+
+    await expect(checkChromeHealth(9_333, { probe })).resolves.toBe(false);
   });
 });
 

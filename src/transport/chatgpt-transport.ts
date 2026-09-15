@@ -42,10 +42,13 @@ export interface DeliverInput {
   timeoutMs?: number;
 }
 
-export interface DeliverOutcome {
+export interface SendOutcome {
   chatUrl: string;
   sentMessageId: string;
   reusedConfirmation: boolean;
+}
+
+export interface DeliverOutcome extends SendOutcome {
   replyMessageId: string;
   replyText: string;
   reply: ParsedReply;
@@ -146,11 +149,12 @@ export class ChatGptTransport {
   }
 
   /**
-   * Deliver one [C2C] message. The ledger key is `taskId:STATE:iteration`; the
-   * conversation is inspected first so a crash between send and confirm resumes
-   * waiting instead of resending an identical message.
+   * Send one [C2C] message and confirm it, without waiting for a reply. The
+   * ledger key is `taskId:STATE:iteration`; the conversation is inspected first
+   * so a crash between send and confirm resumes waiting instead of resending an
+   * identical message.
    */
-  async deliver(input: DeliverInput): Promise<DeliverOutcome> {
+  async send(input: DeliverInput): Promise<SendOutcome> {
     const chatUrl = await this.ensureConversation({ chatUrl: input.chatUrl, forceNewChat: input.forceNewChat });
     const key = deliveryKey(input.taskId, input.state, input.iteration);
     const prepared = prepareDelivery(this.context.workspaceId, {
@@ -180,8 +184,16 @@ export class ChatGptTransport {
       confirmDelivery(this.context.workspaceId, key, { userMessageId: sentMessageId, conversationUrl: chatUrl });
     }
 
+    return { chatUrl, sentMessageId, reusedConfirmation };
+  }
+
+  /** Send one [C2C] message, wait for the reply, then parse and validate it. */
+  async deliver(input: DeliverInput): Promise<DeliverOutcome> {
+    const sent = await this.send(input);
+    const key = deliveryKey(input.taskId, input.state, input.iteration);
+
     const reply = await asTransportError("Waiting for the ChatGPT reply", () =>
-      waitForReplyMessage(this.driver, sentMessageId, this.flowOptions(input.timeoutMs))
+      waitForReplyMessage(this.driver, sent.sentMessageId, this.flowOptions(input.timeoutMs))
     );
     const parsed = parseChatGptReply(reply.text);
     recordDeliveryResponse(this.context.workspaceId, key, {
@@ -195,9 +207,7 @@ export class ChatGptTransport {
     }
 
     return {
-      chatUrl,
-      sentMessageId,
-      reusedConfirmation,
+      ...sent,
       replyMessageId: reply.id,
       replyText: reply.text,
       reply: validation.reply,
