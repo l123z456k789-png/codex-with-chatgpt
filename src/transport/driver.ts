@@ -59,34 +59,54 @@ interface RawSnapshot {
   messages: RawMessage[];
 }
 
-function readDomSnapshot(selectors: SelectorCandidates): RawSnapshot {
-  const find = (candidates: string[]): Element | null => {
-    for (const candidate of candidates) {
-      const match = document.querySelector(candidate);
-      if (match) return match;
-    }
-    return null;
-  };
-  const readText = (element: Element | null): string => {
-    if (!element) return "";
-    if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return element.value;
-    return element.textContent ?? "";
-  };
-  const composer = find(selectors.composer);
+/**
+ * Exported for regression testing. Playwright serializes this function's source
+ * into the page via `page.evaluate`, so it must stay free of named function
+ * bindings and any other transpiler helper references: tsx/esbuild runs with
+ * keepNames, which turns inner `const fn = (...) => ...` bindings into
+ * `__name(...)` calls that do not exist in the page context.
+ */
+export function readDomSnapshot(selectors: SelectorCandidates): RawSnapshot {
+  const composer =
+    selectors.composer
+      .map((candidate) => document.querySelector(candidate))
+      .find((element) => element !== null) ?? null;
+  const stopButton =
+    selectors.stopButton
+      .map((candidate) => document.querySelector(candidate))
+      .find((element) => element !== null) ?? null;
+  const loginIndicator =
+    selectors.loginIndicator
+      .map((candidate) => document.querySelector(candidate))
+      .find((element) => element !== null) ?? null;
   const messages = Array.from(document.querySelectorAll(selectors.message.join(","))).map((element) => {
     const roleHost = element.hasAttribute("data-message-author-role")
       ? element
       : element.querySelector("[data-message-author-role]");
     const role = roleHost?.getAttribute("data-message-author-role") ?? null;
     const body = element.querySelector(selectors.messageBody.join(","));
-    return { role, text: readText(body ?? element) };
+    const target: Element | null = body ?? element;
+    return {
+      role,
+      text:
+        target === null
+          ? ""
+          : target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement
+            ? target.value
+            : target.textContent ?? "",
+    };
   });
   return {
     url: location.href,
     composerPresent: composer !== null,
-    composerText: readText(composer),
-    generating: find(selectors.stopButton) !== null,
-    loginRequired: find(selectors.loginIndicator) !== null || location.pathname.startsWith("/auth/"),
+    composerText:
+      composer === null
+        ? ""
+        : composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
+          ? composer.value
+          : composer.textContent ?? "",
+    generating: stopButton !== null,
+    loginRequired: loginIndicator !== null || location.pathname.startsWith("/auth/"),
     messages,
   };
 }

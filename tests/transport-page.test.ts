@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { tsImport } from "tsx/esm/api";
 import { TransportError } from "../src/transport/errors.js";
 import { messageIdFor, parseMessageIndex } from "../src/transport/driver.js";
 import {
@@ -12,7 +13,7 @@ import {
   waitForReply,
   waitForReplyMessage,
 } from "../src/transport/chatgpt-page.js";
-import { CHATGPT_NEW_CHAT_URL } from "../src/transport/selectors.js";
+import { CHATGPT_NEW_CHAT_URL, SELECTORS } from "../src/transport/selectors.js";
 import { FakePageDriver } from "./fake-page-driver.js";
 
 function expectTransportError(error: unknown, code: string): TransportError {
@@ -307,5 +308,43 @@ describe("waitForReply", () => {
 
     expectTransportError(await caught(waitForReply(driver, "not-a-message-id", FAST)), "CHATGPT_UI_CHANGED");
     expect(driver.snapshotCalls).toBe(0);
+  });
+});
+
+describe("readDomSnapshot serialization", () => {
+  interface RawSnapshotShape {
+    url: string;
+    composerPresent: boolean;
+    composerText: string;
+    generating: boolean;
+    loginRequired: boolean;
+    messages: Array<{ role: string | null; text: string }>;
+  }
+
+  it("stays free of transpiler helpers when Playwright serializes it into a page", async () => {
+    // Load the module through tsx (the runtime bin/c2c.js uses in dev) because
+    // vitest/Vite transpiles with keepNames disabled, while tsx enables it.
+    // Only the tsx copy reproduces the `__name(...)` helpers that Playwright
+    // would serialize into the page.
+    const { readDomSnapshot } = (await tsImport("../src/transport/driver.ts", import.meta.url)) as {
+      readDomSnapshot: (selectors: typeof SELECTORS) => RawSnapshotShape;
+    };
+
+    const build = new Function("document", "location", `return (${readDomSnapshot.toString()});`);
+    const evaluate = build(
+      { querySelector: () => null, querySelectorAll: () => [] },
+      { href: "https://chatgpt.com/c/abc-123", pathname: "/c/abc-123" }
+    ) as (selectors: typeof SELECTORS) => RawSnapshotShape;
+
+    expect(evaluate(SELECTORS)).toEqual({
+      url: "https://chatgpt.com/c/abc-123",
+      composerPresent: false,
+      composerText: "",
+      generating: false,
+      loginRequired: false,
+      messages: [],
+    });
+
+    expect(readDomSnapshot.toString()).not.toMatch(/\b__name\b/);
   });
 });
